@@ -131,6 +131,7 @@ aois$region<-ifelse(aois$region=="ERE","RSS",aois$region)
 maps$region<-ifelse(maps$region=="ERE","RSS",maps$region)
 views$region<-ifelse(views$region=="ERE","RSS",views$region)
 tags$region<-ifelse(tags$region=="ERE","RSS",tags$region)
+taggers$region<-ifelse(taggers$region=="ERE","RSS",taggers$region)
 crowd$region<-ifelse(crowd$region=="ERE","RSS",crowd$region)
 
 #create the unique keys by region
