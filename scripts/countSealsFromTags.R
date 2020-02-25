@@ -13,396 +13,12 @@
 ## Corr factor is ProbSF/ProbFS, or ProbS/ProbF, thus independent of threshold unless... 
 ## We calculate ProbFS by map, and thus ProbSF by map. This means that CorrFactor has expectation ProbS/ProbF. Let's see!
 
-libs<-c("ggplot2","raster","rgdal","plyr","dplyr","sp","rgeos","fitdistrplus")
+libs<-c("ggplot2","plyr","dplyr","fitdistrplus")
 lapply(libs, require, character.only = TRUE)
-
 pathToLocalGit<-"C:/Users/lsalas/git/ContinentalWESEestimates/data/"
 
 ######################  FUNCTIONS WE'LL NEED
-## Convert to UTM
-# data is the table with the geo data
-# latfield is the string naming the latitude field
-# lonfield is the string naming the longitude field
-convertToUTM<-function(data,latfield,lonfield){
-	
-	coordinates(data)<-c(lonfield,latfield)
-	proj4string(data) <- CRS("+proj=longlat +datum=WGS84")
-	utmdata <- spTransform(data, CRS("+proj=utm +zone=58 +south ellps=WGS84"))
-	utmdata<-as.data.frame(utmdata)
-	names(utmdata)<-gsub(lonfield,"easting",names(utmdata))
-	names(utmdata)<-gsub(latfield,"northing",names(utmdata))
-	
-	return(utmdata)
-}
-
-## Find the number of seals the tager correctly identified (compared to ML)
-# taggerTags is the data.frame with all the tagger's tags in maps shared with ML, including the east/north of each tag
-# mlTags is the data.frame with all of ML tags, including the east/north of each tag
-getTaggerSS<-function(taggerTags,mlTags){
-	#loop through each regiontag and see if it's within 3m of a ML regiontag
-	ss<-0
-	for(rr in 1:nrow(taggerTags)){
-		mlTags$taggerEast<-taggerTags[rr,"easting"]
-		mlTags$taggerNorth<-taggerTags[rr,"northing"]
-		mlTags$dist<-sqrt(((mlTags$easting-mlTags$taggerEast)^2)+((mlTags$northing-mlTags$taggerNorth)^2))
-		featTags<-subset(mlTags,dist <= 3)
-		if(nrow(featTags)>0){
-			#take the closest and remove from mlTags
-			ss<-ss+1
-			featTags<-featTags[order(featTags$dist),]
-			topTag<-as.character(featTags[1,"regionTagId"])
-			mlTags<-subset(mlTags,regionTagId!=topTag)
-			if(nrow(mlTags)==0){break}
-		}
-	}
-	return(ss)
-}
-
-## Workhorse function: ProbF = number of  tags in maps inspected/total number of maps inspected			
-## ProbF is the prob that any tag is found on a map.
-## corrProbF should be the probability that any tagger will tag a map, which is the ratio of all tags/all maps
-getTaggerProbabilities_tagsOnlybyTag<-function(rankdata,crthr,taggersSel,tagsSel,tagsML,crtm,viewsSel,ProbS,corrProbF=1){
-	if(!is.na(crthr)){
-		tsdf<-subset(rankdata,(region!="RSS" & taggerScore>=crthr) | (region=="RSS" & taggerScore>=0.75));	#only taggers matching or besting the threshold
-		taggers<-subset(taggersSel,taggersSel$regionTaggerId %in% tsdf$regionTaggerId);	#those taggers that shared maps with Michelle and who also have a score higher or equal to threshold
-	}else{
-		taggers<-taggersSel
-	}
-	
-	#calculate the probabilities for each tagger exceding the threshold crthr - need tags and feature geo
-	taggerProbs<-ldply(.data=unique(taggers$regionTaggerId),.fun=function(tt,viewsSel,crtm,tagsSel,tagsML){
-				#calculating ProbF...(number of maps with tags among the maps inspected by this tagger)
-				#need the number of maps inspected by this tagger
-				taggerMaps<-unique(subset(viewsSel,regionTaggerId==tt)$regionMapId)
-				region<-substr(tt,1,3)
-				tagger_nMaps<-NROW(taggerMaps)
-				#determine how many of these have tags
-				taggerTags<-subset(tagsSel,regionTaggerId==tt)
-				taggerMapsWTags<-NROW(unique(taggerTags$regionMapId))
-				totalTags<-nrow(taggerTags)
-				
-				#how many seals in the maps inspected by the tagger
-				mlTags<-subset(tagsML,regionMapId %in% taggerMaps)	#if this is 0, it's because ML did not find a seal in any of the maps this tagger inspected.
-				totalSeals<-nrow(mlTags)
-				
-				ProbF<-totalTags/tagger_nMaps 	#Use total number of features/total number of maps inspected??
-				#ProbF<-taggerMapsWTags/tagger_nMaps	##DO NOT...use the number of maps with features/total number of maps inspected
-				
-				if(totalTags>0){	#features were found in maps inspected by the tagger
-					#calculating ProbFS...
-					#need the list of maps from this tagger also shared with ML - this is taggerMaps
-					#need the list of tags in these maps
-					
-					if(nrow(mlTags)==0){	#but no seals...
-						ttdf<-data.frame(regionTaggerId=tt,ss=0,nTags=totalTags,nSeals=totalSeals,nMaps=tagger_nMaps,ProbFS=0,ProbF=0,region=region)
-					}else{		#and seals
-						ss<-getTaggerSS(taggerTags,mlTags)
-						ProbFS<-ss/totalSeals
-						
-						ttdf<-data.frame(regionTaggerId=tt,ss=ss,nTags=totalTags,nSeals=totalSeals,nMaps=tagger_nMaps,ProbFS=ProbFS,ProbF=ProbF,region=region)
-					}
-				}else{	#no features found in maps inspected by this tagger
-					ttdf<-data.frame(regionTaggerId=tt,ss=0,nTags=totalTags,nSeals=0,nMaps=tagger_nMaps,ProbFS=0,ProbF=0,region=region)
-				}
-				
-				
-				return(ttdf)},viewsSel=viewsSel,crtm=crtm,tagsSel=tagsSel,tagsML=tagsML)
-	
-	taggerProbs<-subset(taggerProbs,ProbFS>0)	#use only data from taggers that had seals and features...
-	if(nrow(taggerProbs)>0){
-		taggerProbs$ProbS<-ProbS
-		taggerProbs$ProbSF<-taggerProbs$ProbS*taggerProbs$ProbFS/taggerProbs$ProbF	
-		taggerProbs$corrFactor<-taggerProbs$ProbSF/taggerProbs$ProbFS
-	}else{ #none of the computed probabilities permits the estimation of corrFactor
-		taggerProbs<-NA
-	}
-	
-	return(taggerProbs)
-}
-
-
-## Workhorse function - same as above, but not region-specific: 
-## ProbF = number of  tags in maps inspected/total number of maps inspected			
-## ProbF is the prob that any tag is found on a map.
-## corrProbF should be the probability that any tagger will tag a map, which is the ratio of all tags/all maps
-getTaggerProbabilities_tagsOnlybyTag_general<-function(rankdata,crthr,taggersSel,tagsSel,tagsML,crtm,viewsSel,ProbS,corrProbF=1){
-	if(!is.na(crthr)){
-		tsdf<-subset(rankdata,(region!="RSS" & taggerScore>=crthr) | (region=="RSS" & taggerScore>=0.75));	#only taggers matching or besting the threshold
-		taggers<-subset(taggersSel,taggersSel$taggerId %in% tsdf$taggerId);	#those taggers that shared maps with Michelle and who also have a score higher or equal to threshold
-	}else{
-		taggers<-taggersSel
-	}
-	
-	#calculate the probabilities for each tagger exceding the threshold crthr - need tags and feature geo
-	taggerProbs<-ldply(.data=unique(taggers$taggerId),.fun=function(tt,viewsSel,crtm,tagsSel,tagsML){
-				#calculating ProbF...(number of maps with tags among the maps inspected by this tagger)
-				#need the number of maps inspected by this tagger
-				taggerMaps<-unique(subset(viewsSel,taggerId==tt)$regionMapId)
-				tagger_nMaps<-NROW(taggerMaps)
-				#determine how many of these have tags
-				taggerTags<-subset(tagsSel,taggerId==tt)
-				taggerMapsWTags<-NROW(unique(taggerTags$regionMapId))
-				totalTags<-nrow(taggerTags)
-				
-				#how many seals in the maps inspected by the tagger
-				mlTags<-subset(tagsML,regionMapId %in% taggerMaps)	#if this is 0, it's because ML did not find a seal in any of the maps this tagger inspected.
-				totalSeals<-nrow(mlTags)
-				
-				ProbF<-totalTags/tagger_nMaps 	#Use total number of features/total number of maps inspected??
-				#ProbF<-taggerMapsWTags/tagger_nMaps	##DO NOT...use the number of maps with features/total number of maps inspected
-				
-				if(totalTags>0){	#features were found in maps inspected by the tagger
-					#calculating ProbFS...
-					#need the list of maps from this tagger also shared with ML - this is taggerMaps
-					#need the list of tags in these maps
-					
-					if(nrow(mlTags)==0){	#but no seals...
-						ttdf<-data.frame(taggerId=tt,ss=0,nTags=totalTags,nSeals=totalSeals,nMaps=tagger_nMaps,ProbFS=0,ProbF=0)
-					}else{		#and seals
-						ss<-getTaggerSS(taggerTags,mlTags)
-						ProbFS<-ss/totalSeals
-						
-						ttdf<-data.frame(taggerId=tt,ss=ss,nTags=totalTags,nSeals=totalSeals,nMaps=tagger_nMaps,ProbFS=ProbFS,ProbF=ProbF)
-					}
-				}else{	#no features found in maps inspected by this tagger
-					ttdf<-data.frame(taggerId=tt,ss=0,nTags=totalTags,nSeals=0,nMaps=tagger_nMaps,ProbFS=0,ProbF=0)
-				}
-				
-				
-				return(ttdf)},viewsSel=viewsSel,crtm=crtm,tagsSel=tagsSel,tagsML=tagsML)
-	
-	taggerProbs<-subset(taggerProbs,ProbFS>0)	#use only data from taggers that had seals and features...
-	if(nrow(taggerProbs)>0){
-		taggerProbs$ProbS<-ProbS
-		taggerProbs$ProbSF<-taggerProbs$ProbS*taggerProbs$ProbFS/taggerProbs$ProbF	
-		taggerProbs$corrFactor<-taggerProbs$ProbSF/taggerProbs$ProbFS
-	}else{ #none of the computed probabilities permits the estimation of corrFactor
-		taggerProbs<-NA
-	}
-	
-	return(taggerProbs)
-}
-
-
-## Workhorse function: abbreviated, entirely confusion-matrix-based 
-#   ProbF comes from the confuson matrix: totalFeatures/(totalFeatures + totalNotFeatures), where totalNotFeatures are the seals not tagged
-#   ProbS also comes from the confusion matrix: totalSeals/(totalSeals + totalNonSeals), where totalNonSeals are the features that are not seals 
-getTaggerProbabilities_fromQ<-function(rankdata,crthr,taggersSel,tagsSel,tagsML,mapsML,viewsSel){
-	if(!is.na(crthr)){
-		tsdf<-subset(rankdata,(region!="RSS" & taggerScore>=crthr) | (region=="RSS" & taggerScore>=0.75));	#only taggers matching or besting the threshold
-		taggers<-subset(taggersSel,taggersSel$regionTaggerId %in% tsdf$regionTaggerId);	#those taggers that shared maps with Michelle and who also have a score higher or equal to threshold
-		###REVIEW!!
-	}else{
-		taggers<-taggersSel
-	}
-	
-	#calculate the quotient ProbS/ProbF for each tagger exceding the threshold crthr - need tags and feature geo
-	taggerProbs<-ldply(.data=unique(taggers$regionTaggerId),.fun=function(tt,viewsSel,tagsSel,tagsML,mapsML){
-				#calculating ProbF...(number of maps with tags among the maps inspected by this tagger)
-				#need the number of maps inspected by this tagger
-				taggerMaps<-unique(subset(viewsSel,regionTaggerId==tt)$regionMapId)
-				region<-substr(tt,1,3)
-				#determine how many of these overlap with MLRs and how many seals and features are we dealing with
-				mlMaps<-subset(mapsML,regionMapId %in% taggerMaps); numOverMaps<-nrow(mlMaps)
-				mlTags<-subset(tagsML,regionMapId %in% taggerMaps); TS<-nrow(mlTags)
-				taggerTags<-subset(tagsSel,regionTaggerId==tt);TF<-nrow(taggerTags)
-				# Need TS, TF and TT, where TS is total seals (or SS + SN), TF is total features (or SS + NS), and TT is total tags combined (or SS + SN + NS)
-				# SS is seals tagged, NS is features that are not seals, and SN are seals not tagged
-				# But since Qval = ProbS/ProbF, and ProbS = TS/TT and ProbF = TF/TT, then Qval=TS/TF
-				if(TF>0){
-					Qval=TS/TF
-				}else{	#no features found in maps inspected by this tagger
-					Qval<-NA
-				}
-				
-				ttdf<-data.frame(regionTaggerId=tt,nTags=TF,nSeals=TS,nMaps=numOverMaps,Qval=Qval,region=region)
-				return(ttdf)
-			},viewsSel=viewsSel,tagsSel=tagsSel,tagsML=tagsML,mapsML=mapsML)
-	
-	taggerProbs<-subset(taggerProbs,!is.na(Qval) & nSeals>0)
-	return(taggerProbs)
-}
-
-
-## Workhorse function: abbreviated, entirely confusion-matrix-based 
-#   ProbF comes from the confuson matrix: totalFeatures/(totalFeatures + totalNotFeatures), where totalNotFeatures are the seals not tagged
-#   ProbS also comes from the confusion matrix: totalSeals/(totalSeals + totalNonSeals), where totalNonSeals are the features that are not seals 
-getTaggerProbabilities_fromQ_general<-function(rankdata,crthr,taggersSel,tagsSel,tagsML,mapsML,viewsSel){
-	if(!is.na(crthr)){
-		tsdf<-subset(rankdata,(region!="RSS" & taggerScore>=crthr) | (region=="RSS" & taggerScore>=0.75));	#only taggers matching or besting the threshold
-		taggers<-subset(taggersSel,taggersSel$regionTaggerId %in% tsdf$regionTaggerId);	#those taggers that shared maps with Michelle and who also have a score higher or equal to threshold
-		###REVIEW!!
-	}else{
-		taggers<-taggersSel
-	}
-	
-	#calculate the quotient ProbS/ProbF for each tagger exceding the threshold crthr - need tags and feature geo
-	taggerProbs<-ldply(.data=unique(taggers$taggerId),.fun=function(tt,viewsSel,tagsSel,tagsML,mapsML){
-				#calculating ProbF...(number of maps with tags among the maps inspected by this tagger)
-				#need the number of maps inspected by this tagger
-				taggerMaps<-unique(subset(viewsSel,taggerId==tt)$regionMapId)
-				#determine how many of these overlap with MLRs and how many seals and features are we dealing with
-				mlMaps<-subset(mapsML,regionMapId %in% taggerMaps); numOverMaps<-nrow(mlMaps)
-				mlTags<-subset(tagsML,regionMapId %in% taggerMaps); TS<-nrow(mlTags)
-				taggerTags<-subset(tagsSel,taggerId==tt);TF<-nrow(taggerTags)
-				# Need TS, TF and TT, where TS is total seals (or SS + SN), TF is total features (or SS + NS), and TT is total tags combined (or SS + SN + NS)
-				# SS is seals tagged, NS is features that are not seals, and SN are seals not tagged
-				# But since Qval = ProbS/ProbF, and ProbS = TS/TT and ProbF = TF/TT, then Qval=TS/TF
-				if(TF>0){
-					Qval=TS/TF
-				}else{	#no features found in maps inspected by this tagger
-					Qval<-NA
-				}
-				
-				ttdf<-data.frame(taggerId=tt,nTags=TF,nSeals=TS,nMaps=numOverMaps,Qval=Qval)
-				return(ttdf)
-			},viewsSel=viewsSel,tagsSel=tagsSel,tagsML=tagsML,mapsML=mapsML)
-	
-	taggerProbs<-subset(taggerProbs,!is.na(Qval) & nSeals>0)
-	return(taggerProbs)
-}
-
-
-## Estimates by map
-## gspm is the output from getTaggerProbabilities_tagsOnlybyTag
-## tgvutm is a data.frame with properly merged tags and views, uing UTM coordinates 
-## maps is the data file on maps
-## overlays is the data file on overlays
-## mlCounts is teh data.frame of MLR's counts by mapId and region
-## corrMethod is a string naming how the counts were corrected
-## dist is the distribution to fit to the values of correction factors
-getMapEstimates_byTag<-function(gspm,tgvutm,maps,overlays,mlCounts,dist="gamma"){
-	#cutrows<-nrow(gspm)-ceiling(nrow(gspm)*0.05)
-	#gspm<-gspm[order(gspm$corrFactor),]
-	#gspm<-gspm[1:cutrows,]
-	nTaggers<-nrow(gspm)
-	
-	distvals<-fitDistLimits(dist=dist,qdf=gspm,parn="corrFactor")
-	
-	meanCorrF<-distvals$meanCorrF
-	propUpper<-distvals$vupper/meanCorrF
-	propLower<-distvals$vlower/meanCorrF
-	
-	## Estimate number of seals per map
-	numSeals<-aggregate(numTags~regionMapId,tgvutm,sum)
-	numSeals$estNumSeals<-round(numSeals$numTags*meanCorrF)
-	numSeals$uclNumSeals<-round(numSeals$estNumSeals*propUpper)
-	numSeals$lclNumSeals<-round(numSeals$estNumSeals*propLower)
-	
-	maps$regionMapId<-paste0(maps$region,maps$mapId)
-	mlCounts$regionMapId<-paste0(mlCounts$region,mlCounts$mapId)
-	
-	numSeals<-merge(numSeals,maps[,c("overlayId","regionMapId")],by="regionMapId",all.x=T)
-	numSeals<-merge(numSeals,overlays[,c("overlayId","acquisition_date","satId","external_reference")],by="overlayId",all.x=T)
-	numSeals$catalogId<-ifelse(grepl("amazonaws",numSeals$external_reference),substr(numSeals$external_reference,41,56),
-			ifelse(grepl("ddnhehdam2vn0",numSeals$external_reference),substr(numSeals$external_reference,38,53),as.character(numSeals$external_reference)))
-	#numSeals<-subset(numSeals,!is.na(acquisition_date))	#we lose 435 maps that do not have acDate, from 4500 maps we down to 4065
-	numSeals$acDate<-format(numSeals$acquisition_date,"%Y%m%d")
-	numSeals$acYear<-as.integer(format(numSeals$acquisition_date,"%Y"))
-	numSeals$acHour<-as.integer(format(numSeals$acquisition_date,"%H"))
-	numSeals$acquisition_date<-as.character(numSeals$acquisition_date)
-	
-	numEst<-merge(numSeals,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=TRUE)
-	numEst$corrMethod<-"taggerSSCorr"
-	numEst$region<-substr(numEst$regionMapId,1,3)
-	
-	return(numEst)
-}
-
-## This function is similar to the one above, but using Qval instead.
-getMapEstimates_fromQval<-function(qdf,crthr,taggers,nSealsFilt=10,tgvutm,maps,overlays,dist="gamma"){
-	
-	tgvoutm<-merge(tgvutm,maps[,c("regionMapId","overlayId")],by="regionMapId",all.x=T)
-	tgvoutm<-merge(tgvoutm,overlays[,c("overlayId","satId")],by="overlayId")
-	sdf<-aggregate(numTags~region+mapId+year+satId+taggerId+regionTaggerId+regionMapId+overlayId,tgvoutm,sum)
-	
-	#now apply Qval by tagger
-	#seltaggers<-subset(taggers,taggerScore>=crthr)
-	seltaggers<-taggers
-	qdf<-subset(qdf,nSeals>=nSealsFilt)
-	#qdf<-subset(qdf,regionTaggerId %in% seltaggers$regionTaggerId) #Don't need this - the tagger data were already pre-filtered
-	#fit the gamma for qvals
-	#get the median, lower 2.5 and upper 97.5%
-	nTaggers<-nrow(qdf)
-	
-	distvals<-fitDistLimits(dist=dist,qdf=qdf,parn="Qval")
-	
-	meanCorrF<-distvals$meanCorrF
-	propUpper<-distvals$vupper/meanCorrF
-	propLower<-distvals$vlower/meanCorrF
-	
-	sdf$taggerEstNumSeals<-ceiling(sdf$numTags*meanCorrF)
-	sdf$taggerUclNumSeals<-ceiling(sdf$taggerEstNumSeals*propUpper)
-	sdf$taggerLclNumSeals<-ceiling(sdf$taggerEstNumSeals*propLower)
-	sdf<-merge(sdf,seltaggers[,c("regionTaggerId","taggerScore")],by="regionTaggerId",all.x=TRUE)
-	
-	#for each map in sdf
-		#average the estimated value across all taggers who inspected it
-		#also calculate the weighted average using crscores
-	sdfp <- sdf %>% 
-			group_by(region,mapId,regionMapId,year,overlayId,satId) %>% 
-			dplyr::summarise(numTaggers=NROW(unique(regionTaggerId)),estNumSeals=round(mean(taggerEstNumSeals)),uclNumSeals=round(mean(taggerUclNumSeals)),lclNumSeals=round(mean(taggerLclNumSeals)),
-					wgtEstNumSeals=round(weighted.mean(taggerEstNumSeals,taggerScore)),wgtUclNumSeals=round(weighted.mean(taggerUclNumSeals,taggerScore)),wgtLclNumSeals=round(weighted.mean(taggerLclNumSeals,taggerScore)))
-	sdfp<-as.data.frame(sdfp)
-	sdfp$corrMethod<-"taggerQVal"
-	sdfp$crThreshold<-crthr
-	return(sdfp)
-	
-}
-
-## The following function returns the number of maps with tags given the crowdrank threshold
-## the number of tags in those maps, and the average number of tags per map
-# tags is the table with all tags and the views where these were placed
-## views is the table of all map views
-## maps is the table with information about each map and its link to an image (overlay)
-## overlays is the table with data on the satellite images 
-## byRegion is a binary that summarizes the countsby region 
-getTagStats<-function(tags,views,maps,overlays,byRegion=TRUE){
-	#need to know all maps with tags, and the average number of tags per map
-	tgv<-merge(tags,views[,c("mapViewId","mapId","region","regionMapId")],by=c("mapViewId","region"),all.x=TRUE)
-	tgmp<-merge(tgv,maps[,c("mapId","region","overlayId","mapcoords.x1","mapcoords.x2")],by=c("mapId","region"),all.x=TRUE)
-	tgco<-merge(tgmp,overlays[,c("overlayId","acquisition_date")],by="overlayId",all.x=TRUE)
-	tgco$satdate<-format(tgco$acquisition_date,"%Y-%m-%d %H:%M:%S")
-	tagsPerMapDate<-aggregate(mapId~regionMapId+satdate+region+mapcoords.x1+mapcoords.x2,data=tgco,NROW)
-	names(tagsPerMapDate)<-c("RegionMapId","ImgDate","Region","mapLon","mapLat","NumTags")
-	if(byRegion){
-		res<-aggregate(NumTags~ImgDate+Region,data=tagsPerMapDate,sum)
-	}else{
-		res<-tagsPerMapDate
-	}
-	return(tagsPerMapDate)
-}
-
-
-## The following function fits a distribution to the data of correction factors
-## dist is the named distribution to fit, either: "gamma", "lognorm"", or "weibull"
-## qdf is the data.frame of correction factor values
-## parn is the name of the correction factor parameter in qdf
-fitDistLimits<-function(dist="gamma",qdf,parn){
-	if(dist=="lognorm"){
-		## If using log-normal
-		ndist<-fitdist(log(qdf[,parn]), "norm")$estimate
-		meanCorrF<-exp(ndist[1])
-		vupper<-exp(qnorm(0.975,ndist[1],ndist[2]))
-		vlower<-exp(qnorm(0.025,ndist[1],ndist[2]))
-		
-	}else if(dist=="weibull"){
-		## If using Weibull
-		wdist<-fitdist(qdf[,parn], "weibull")$estimate
-		meanCorrF<-wdist[2]*gamma(1+1/wdist[1])
-		vupper<-qweibull(0.975,wdist[1],wdist[2])
-		vlower<-qweibull(0.025,wdist[1],wdist[2])
-		
-	}else{	#gamma, default
-		## If using Gamma
-		gammdist<-fitdist(qdf[,parn], "gamma", method="mle")$estimate
-		meanCorrF<-gammdist[1]/gammdist[2]
-		vupper<-qgamma(0.975,gammdist[1],gammdist[2])
-		vlower<-qgamma(0.025,gammdist[1],gammdist[2])
-	}
-	res<-list(meanCorrF=meanCorrF, vupper=vupper, vlower=vlower)
-	return(res)
-}
+source("C:/Users/lsalas/git/ContinentalWESEestimates/scripts/countSealsFromTags_functions.R")
 
 ################################### DATA
 mid<-21758509	## This is Michelle LaRue's tagger Id
@@ -412,15 +28,14 @@ load(paste0(pathToLocalGit,"compiledData.RData"))
 
 
 ##############################
-#prepare to count tags and convert to UTM
+#prepare to count tags 
 tags<-unique(tags)
-tgutm<-convertToUTM(tags,lonfield="tagcoords.x1",latfield="tagcoords.x2")
-tgvutm<-merge(tgutm,views[,c("mapViewId","mapId","region")],by=c("mapViewId","region"),all.x=T)
+tgvutm<-merge(tags,views[,c("mapViewId","mapId","region")],by=c("mapViewId","region"),all.x=T)
 tgvutm$numTags<-1
 tgvutm$regionMapId<-paste0(tgvutm$region,tgvutm$mapId)
 
 #prepare the feature data
-crt<-merge(crowd[,c("tagId","score","agremnt","sensor","region")],tgutm[,c("tagId","mapViewId","easting","northing","region","regionTagId","regionMapViewId","regionTaggerId")],by=c("tagId","region"),all.x=T)
+crt<-merge(crowd[,c("tagId","score","agremnt","sensor","region")],tgvutm[,c("tagId","mapViewId","easting","northing","region","regionTagId","regionMapViewId","regionTaggerId")],by=c("tagId","region"),all.x=T)
 crt<-subset(crt,!is.na(mapViewId))
 crtm<-merge(crt,views[,c("mapViewId","mapId","region")],by=c("mapViewId","region"),all.x=T)
 crtm<-subset(crtm,!is.na(mapId))
@@ -464,19 +79,18 @@ estProbS<-NROW(unique(tagsML$regionMapId))/NROW(unique(mlMaps$regionMapId))
 
 #if only a fraction of tags are seals, the approximate correction would be...
 (estCorr<-estProbS/estProbF)
-#That is, roughtly we count 1.76 seals for every tag placed
-## THIS IS A PROBLEM
+#That is, roughtly we count 1.3 seals for every tag placed
+## THIS IS NOT what we expected: more tags than seals...
 
 
 ############ SHRINK
 ## ProbF (for each tagger separately) = number of  tags in maps inspected/total number of maps inspected 
 ## ProbF is the prob that any tag is found on a map.
-## corrProbF should be the probability that any tagger will tag a map, which is the ratio of all tags/all maps 
 ## Version 1A: region-specific estimates
-gspm<-getTaggerProbabilities_tagsOnlybyTag(rankdata=rankdata,crthr=0.5,taggersSel=subtaggers,tagsSel=tagsSel,tagsML=tagsML,crtm=crtm,viewsSel=viewsSel,ProbS=estProbS)
+gspm<-getTaggerProbabilities_tagsOnlybyTag(rankdata=rankdata,crthr=0.5,taggersSel=subtaggers,tagsSel=tagsSel,tagsML=tagsML,viewsSel=viewsSel,ProbS=estProbS)
 
 ## Version 1B: general
-gspmG<-getTaggerProbabilities_tagsOnlybyTag_general(rankdata=rankdata,crthr=0.5,taggersSel=subtaggers,tagsSel=tagsSel,tagsML=tagsML,crtm=crtm,viewsSel=viewsSel,ProbS=estProbS)
+gspmG<-getTaggerProbabilities_tagsOnlybyTag_general(rankdata=rankdata,crthr=0.5,taggersSel=subtaggers,tagsSel=tagsSel,tagsML=tagsML,viewsSel=viewsSel,ProbS=estProbS)
 
 ## Option 2 - use the ratio of seals to features per tagger to calculate Q
 ## Version 2A: region-specific estimates
@@ -495,8 +109,8 @@ summary(gspmG$corrFactor); nrow(gspmG)
 
 ## Checking the distribution of values
 ggplot(gspm,aes(x=corrFactor)) + geom_density()
-## The above plot shows that it is safe to remove factors of value > 4. There are only 3 of these. Here removing the top 5%
-gspm<-subset(gspm,corrFactor < 3.5)
+## The above plot shows that it is safe to remove factors of value > 3. There are only 3 of these. 
+gspm<-subset(gspm,corrFactor < 3)
 ## Review the distribution fit options: log-normal, gamma or Weibull
 tstdist<-fitdist(log(gspm$corrFactor),"norm"); plot(tstdist)	#is log-normal best fit??
 tstdist<-fitdist(gspm$corrFactor,"gamma"); plot(tstdist)	#I think gamma/weibull is best
@@ -524,34 +138,347 @@ tstdist<-fitdist(gspmQ$Qval,"gamma"); plot(tstdist)
 tstdist<-fitdist(gspmQ$Qval,"weibull"); plot(tstdist)   #Weibull is certainly the best fit
 
 #SO:
-qdist<-fitdist(gspmQG$Qval,"weibull")$estimate
+qdist<-fitdist(gspmQ$Qval,"weibull")$estimate
 weimean<-qdist[2]*gamma(1+1/qdist[1])
 paste(round(qweibull(0.025,qdist[1],qdist[2]),3),"-",round(weimean,3),"-",round(qweibull(0.975,qdist[1],qdist[2]),3))
 ## The q-values are more reasonable: the number of seals is anywhere from 7% to 157% of the tag counts, mean being 62% - more conservative!
+# versus
+qdist<-fitdist(gspmQG$Qval,"weibull")$estimate
+weimean<-qdist[2]*gamma(1+1/qdist[1])
+paste(round(qweibull(0.025,qdist[1],qdist[2]),3),"-",round(weimean,3),"-",round(qweibull(0.975,qdist[1],qdist[2]),3))
+## The general approach is more conservative, and better than using ss
 
 #############################################################################
+## For map estimates, setting the CI to 90% per Nadav's request
+cival=90
 ## Let's calculate seal numbers...
 ## Using the region-specific form:
-countByQ<-getMapEstimates_fromQval(qdf=gspmQ,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,dist="weibull")
+#cdf,crthr=0.5,taggers,nSealsFilt=10,tgvutm,maps,overlays,corrMethod,dist="gamma"
+countByQ<-getMapEstimates(cdf=gspmQ,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerQval",dist="weibull",cival=cival)
 estByRegionQ<-as.data.frame(countByQ %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
 estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)),estNumSeals=round(sum(countByQ$estNumSeals)),uclNumSeals=round(sum(countByQ$uclNumSeals))))
 print(estByRegionQ)
 
 ## If we were to use the general form:
-countByQG<-getMapEstimates_fromQval(qdf=gspmQG,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,dist="weibull")
+countByQG<-getMapEstimates(cdf=gspmQG,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerQval",dist="weibull",cival=cival)
 estByRegionQG<-as.data.frame(countByQG %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
 estByRegionQG<-rbind(estByRegionQG,data.frame(region="Total",lclNumSeals=round(sum(countByQG$lclNumSeals)),estNumSeals=round(sum(countByQG$estNumSeals)),uclNumSeals=round(sum(countByQG$uclNumSeals))))
 print(estByRegionQG)
 
-## And if we used the tagger-specific ss values:
-countBySS<-getMapEstimates_byTag(gspm=gspm,tgvutm=tgvutm,maps=maps,overlays=overlays,mlCounts=mlCounts)
+## And if we used the region-specific ss values:
+countBySS<-getMapEstimates(cdf=gspm,crthr=0.5,taggers=subtaggers,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerCorrFactor",dist="gamma",cival=cival)
 estByRegionSS<-as.data.frame(countBySS %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
 estByRegionSS<-rbind(estByRegionSS,data.frame(region="Total",lclNumSeals=round(sum(countBySS$lclNumSeals)),estNumSeals=round(sum(countBySS$estNumSeals)),uclNumSeals=round(sum(countBySS$uclNumSeals))))
 print(estByRegionSS)
 
-## However, these numbers are probably too high - according to this graph, x5 times too high
-ggplot(subset(countBySS,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x,color="red")
-## CANNOT WORK WITH the ss estimates because the sample of surveyors is too biased!
+## However, these numbers are probably too high - according to this graph,  ~38% too high
+countBySS<-merge(countBySS,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
+ggplot(subset(countBySS,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+## The sample of surveyors is biased!
 
-save(estByRegionQ, estByRegionQG, file=paste0(pathToLocalGit,"estimatesByMap.RData"))
+## Testing countByQ
+countByQ<-merge(countByQ,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
+ggplot(subset(countByQ,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+## Seems to underestimate a little
+
+## The general method is best
+countByQG<-merge(countByQG,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
+ggplot(subset(countByQG,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+
+## We have some very high tag counts for low true seal counts. Inspecting these...
+w<-tags; w$tagCount<-1
+w<-merge(w,views[,c("regionMapViewId","regionMapId")],by="regionMapViewId",all.x=T)
+## Incredibly, there are still problems in the data like this one:
+#  mapId region mapViewId taggerId year regionMapViewId regionMapId regionTaggerId
+# 357856    QMA    218627   138101 2011       QMA218627   QMA357856      QMA138101
+# 357856    QMA    218621   138101 2011       QMA218621   QMA357856      QMA138101
+## NOTE: same taggerId, same mapId, different viewId???
+
+ww<-aggregate(tagCount~regionMapId+regionTaggerId+region+year,w,sum)
+## So, rarely there are >50 seals in a map. Let's say we try to filter out the tag counts > 100?
+## Can we remove these and still have other counts for these maps?
+sum(ww$tagCount>100)  #44 cases in 40 maps
+NROW(unique(subset(ww,tagCount>100)$regionMapId))/nrow(ww)  #40 maps out of 18,031, or 0.1%
+
+## Can we filter out these crazy counts?
+tcdf<-ldply(.data=unique(subset(ww,tagCount>100)$regionMapId), .fun=function(z,ww,views){
+			ovis<-NROW(unique(subset(ww,regionMapId==z)$regionTaggerId))
+			mval<-subset(ww,tagCount>100 & regionMapId==z)
+			mval<-mval[,c("regionTaggerId","region","regionMapId","tagCount")]
+			mval$totalViews<-ovis
+			return(mval)
+		},ww=ww,views=views)
+
+tcdf<-tcdf[order(tcdf$regionMapId),]
+print(tcdf)
+## Several map counts could not be filtered, but some could.
+## Let's look at the counts from maps for each of the above taggers vs other people's counts...
+sum(tcdf$totalViews)-2 #one of the maps has high counts from both taggers inspecting it: QMA357856, and both very close counts!
+ww$taggerId<-substr(ww$regionTaggerId,4,nchar(ww$regionTaggerId))
+tcdf$taggerId<-substr(tcdf$regionTaggerId,4,nchar(tcdf$regionTaggerId))
+wwt<-subset(ww,taggerId %in% tcdf$taggerId) 	#all the counts from the high taggers
+wwm<-subset(ww,regionMapId %in% wwt$regionMapId)	#all the map counts from maps inspected by the high taggers
+wwm$highTagger<-ifelse(wwm$taggerId %in% tcdf$taggerId,"Yes","No")
+
+#let's try to visualize how much hogher these taggers count...
+ndf<-aggregate(tagCount~regionMapId+highTagger,subset(wwm,highTagger=="No"),max)
+ydf<-subset(wwm,highTagger=="Yes" & regionMapId %in% ndf$regionMapId,select=c("regionMapId","highTagger","tagCount"))
+pdf<-rbind(ndf,ydf)
+ggplot(pdf,aes(x=tagCount)) + geom_density() + facet_wrap(~highTagger,scales="free")
+## The Yes taggers (high taggers) have much larger numbers!
+
+## For these hightaggers, use the mean from the qvals/corrfactors for those in the appropriate gspm and correct their counts individually.
+
+
+## So, we get numbers again and evaluate again - using the general estimates for Qval:
+indivQdf<-subset(gspmQ,regionTaggerId %in% tcdf$regionTaggerId, select=c("regionTaggerId","Qval"))
+unique(subset(tcdf,!regionTaggerId %in% indivQdf$regionTaggerId)$regionTaggerId)   ## Do we have value for all? No.
+indivQdf<-rbind(indivQdf,data.frame(regionTaggerId=unique(subset(tcdf,!regionTaggerId %in% indivQdf$regionTaggerId)$regionTaggerId),Qval=mean(indivQdf$Qval)))   ## For the missing we use the average of the highTaggers for which we have Qvals/corrFactors
+countByQ<-getMapEstimates(cdf=gspmQ,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerQval",dist="weibull",regional=TRUE,indivCFdf=indivQdf,cival=cival)
+estByRegionQ<-as.data.frame(countByQ %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
+estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)),estNumSeals=round(sum(countByQ$estNumSeals)),uclNumSeals=round(sum(countByQ$uclNumSeals))))
+print(estByRegionQ)
+
+## If we were to use the general form:
+indivQdf<-subset(gspmQG,taggerId %in% tcdf$taggerId, select=c("taggerId","Qval"))
+unique(subset(tcdf,!taggerId %in% indivQdf$taggerId)$taggerId)   
+indivQdf<-rbind(indivQdf,data.frame(taggerId=unique(subset(tcdf,!taggerId %in% indivQdf$taggerId)$taggerId),Qval=mean(indivQdf$Qval)))   
+countByQG<-getMapEstimates(cdf=gspmQG,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerQval",dist="weibull",regional=FALSE,indivCFdf=indivQdf,cival=cival)
+estByRegionQG<-as.data.frame(countByQG %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
+estByRegionQG<-rbind(estByRegionQG,data.frame(region="Total",lclNumSeals=round(sum(countByQG$lclNumSeals)),estNumSeals=round(sum(countByQG$estNumSeals)),uclNumSeals=round(sum(countByQG$uclNumSeals))))
+print(estByRegionQG)
+
+## And if we used the region-specific ss values:
+indivCFdf<-subset(gspm,regionTaggerId %in% tcdf$regionTaggerId, select=c("regionTaggerId","corrFactor"))
+unique(subset(tcdf,!regionTaggerId %in% indivCFdf$regionTaggerId)$regionTaggerId)   
+indivCFdf<-rbind(indivCFdf,data.frame(regionTaggerId=unique(subset(tcdf,!regionTaggerId %in% indivCFdf$regionTaggerId)$regionTaggerId),corrFactor=mean(indivCFdf$corrFactor)))   
+countBySS<-getMapEstimates(cdf=gspm,crthr=0.5,taggers=subtaggers,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerCorrFactor",dist="gamma",regional=TRUE,indivCFdf=indivCFdf,cival=cival)
+estByRegionSS<-as.data.frame(countBySS %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
+estByRegionSS<-rbind(estByRegionSS,data.frame(region="Total",lclNumSeals=round(sum(countBySS$lclNumSeals)),estNumSeals=round(sum(countBySS$estNumSeals)),uclNumSeals=round(sum(countBySS$uclNumSeals))))
+print(estByRegionSS)
+
+## However, these numbers are probably too high - according to this graph,  ~38% too high
+countBySS<-merge(countBySS,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
+ggplot(subset(countBySS,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(countBySS$estNumSeals)
+## Underestimates by 34%
+
+## Testing countByQ
+countByQ<-merge(countByQ,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
+ggplot(subset(countByQ,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(countByQ$estNumSeals)
+## Seems to underestimate by 25%
+
+## The general method is still best - does not over-estimate, values are more precise (though less accurate than countBySS)
+countByQG<-merge(countByQG,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
+ggplot(subset(countByQG,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(countByQG$estNumSeals)
+## Seems to underestimate by 30%
+
+## one of two things are happening:
+# 1)	The general sample used to generate the correction factors is really not representative and overall results in the underestimate we see; or…
+# 2)	The set of MLR maps is a “special case” among all maps where the correction results in an underestimate.
+# Since the correction factor is developed for all taggers that overlap with MLR, the underestimate should not happen if “the total is the sum of the parts”. 
+# We correct each tagger separately, and expect that the collective should be correct (the graph is indeed against MLR counts). The fact that we see the underestimate 
+# indicates that the collective set of values is not “the sum of the parts.” The sample of taggers results in a biased-low mean estimate of the correction factor. 
+# In other words, we have evidence for case #1 above. We have no evidence for case #2.
+
+## So...
+inflQ<-1.315
+estByRegionQ<-as.data.frame(countByQ %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflQ),estNumSeals=ceiling(sum(estNumSeals)*inflQ),uclNumSeals=ceiling(sum(uclNumSeals)*inflQ)))
+estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)*inflQ),estNumSeals=round(sum(countByQ$estNumSeals)*inflQ),uclNumSeals=round(sum(countByQ$uclNumSeals)*inflQ)))
+print(estByRegionQ)
+pq<-ggplot(subset(countByQ,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflQ)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(countByQ$estNumSeals*inflQ)
+
+## Or...
+inflQG<-1.42
+estByRegionQG<-as.data.frame(countByQG %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflQG),estNumSeals=ceiling(sum(estNumSeals)*inflQG),uclNumSeals=ceiling(sum(uclNumSeals)*inflQG)))
+estByRegionQG<-rbind(estByRegionQG,data.frame(region="Total",lclNumSeals=round(sum(countByQG$lclNumSeals)*inflQG),estNumSeals=round(sum(countByQG$estNumSeals)*inflQG),uclNumSeals=round(sum(countByQG$uclNumSeals)*inflQG)))
+print(estByRegionQG)
+pqg<-ggplot(subset(countByQG,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflQG)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(countByQG$estNumSeals*inflQG)
+
+## Or..
+inflSS<-1.46
+estByRegionSS<-as.data.frame(countBySS %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflSS),estNumSeals=ceiling(sum(estNumSeals)*inflSS),uclNumSeals=ceiling(sum(uclNumSeals)*inflSS)))
+estByRegionSS<-rbind(estByRegionSS,data.frame(region="Total",lclNumSeals=round(sum(countBySS$lclNumSeals)*inflSS),estNumSeals=round(sum(countBySS$estNumSeals)*inflSS),uclNumSeals=round(sum(countBySS$uclNumSeals)*inflSS)))
+print(estByRegionSS)
+pss<-ggplot(subset(countBySS,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflSS)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(countBySS$estNumSeals*inflSS)
+
+
+## Adjust countByQ and countByQG - we will use countByQ
+countByQ$estNumSeals<-round(countByQ$estNumSeals*inflQ)
+countByQ$uclNumSeals<-round(countByQ$uclNumSeals*inflQ)
+countByQ$lclNumSeals<-round(countByQ$lclNumSeals*inflQ)
+
+countByQG$estNumSeals<-round(countByQG$estNumSeals*inflQG)
+countByQG$uclNumSeals<-round(countByQG$uclNumSeals*inflQG)
+countByQG$lclNumSeals<-round(countByQG$lclNumSeals*inflQG)
+
+## Need to add year and hour of the day to the results (Ross Sea time - NZDT), and map lat/lon
+## PDT to NZDT is +19 hrs
+## PST to NZDT is +21 hrs
+makeRSdate<-function(x){
+	tzn<-format(x,"%Z")
+	if(tzn=="PST"){
+		ndt<-as.POSIXlt(x,tz="Pacific/Auckland")
+	}
+}
+nrow(countByQ)
+countByQ<-merge(countByQ,unique(overlays[,c("overlayId","acquisition_date")]),by="overlayId",all.x=TRUE)
+nrow(countByQ)
+countByQ$originHour<-format(countByQ$acquisition_date,"%H")
+countByQ$originTZ<-format(countByQ$acquisition_date,"%Z")
+countByQ$RSdate<-as.POSIXlt(countByQ$acquisition_date,tz="Pacific/Auckland")
+countByQ$RShour<-format(countByQ$RSdate,"%H")
+countByQ<-merge(countByQ,maps[,c("regionMapId","mapcoords.x1","mapcoords.x2")],by="regionMapId",all.x=TRUE)
+pdf<-countByQ
+pdf$abBin<-ifelse(pdf$estNumSeals<20,"Under 20",ifelse(pdf$estNumSeals>19 & pdf$estNumSeals<51,"20 to 50","Over 50"))
+pdf$abBin2<-ifelse(pdf$estNumSeals<40,"Under 40","Over 40")
+pdf$wvq<-ifelse(pdf$satId=="QB02","QB","WV")
+ggplot(pdf,aes(x=estNumSeals)) + geom_histogram(aes(fill=satId),position="dodge",binwidth=4) + facet_wrap(~abBin2,scales="free") + labs(x="Seals per map",y="Number of maps")
+
+# We can see that under 40 the distributions among satIds are the same for WV01, for WV02, and for QB (only 9 maps from GE01)
+# The problem is the counts in 23 maps above 40 seals (out of 17,453!)
+aggregate(regionMapId~satId,pdf,NROW)
+
+#### FOR THE RECORD, the real problem is the large number of 1-seal maps - imperfect detection (seals diving!)
+
+# SO: maybe we don't need to worry much about these 23 maps, or we can shrink them to the mean of the hour:
+p1<-ggplot(countByQ,aes(x=RShour,y=estNumSeals))+geom_boxplot(aes(color=satId)) + geom_hline(yintercept=40)
+# Note the 6 outliers
+outs<-subset(countByQ,estNumSeals>40)
+# The value for WV01 on the 21st hour is NOT credible, from only 1 tagger
+g<-subset(tags,regionMapViewId %in% unique(subset(views,regionMapId=="RSS1255032")$regionMapViewId))
+aggregate(tagId~regionTaggerId,g,NROW)
+
+# The value for WV1 for the 4th hour is also not credible - only 1 tagger
+g<-subset(tags,regionMapViewId %in% unique(subset(views,regionMapId=="RSS938501")$regionMapViewId))
+aggregate(tagId~regionTaggerId,g,NROW)
+
+# More generally, we can choose to trust values where there were 3 or more taggers
+outvals<-ldply(.data=outs$regionMapId,.fun=function(mm,outs,tags,views){
+			g<-subset(tags,regionMapViewId %in% unique(subset(views,regionMapId==mm)$regionMapViewId))
+			tou<-subset(outs,regionMapId==mm)
+			ns<-tou$estNumSeals; nt<-tou$numTaggers; hr<-tou$RShour
+			adf<-aggregate(tagId~regionTaggerId,g,NROW)
+			tdf<-data.frame(Hour=hr,regionMapId=mm,estNumSeals=ns,numTaggers=nt,minTags=min(adf$tagId),maxTags=max(adf$tagId),meanTags=mean(adf$tagId))
+			return(tdf)
+		},outs=outs,tags=tags,views=views)
+outvals$Hour<-as.character(outvals$Hour)
+
+# We can't trust any value with mean tags > 100, and we can't trust any value with tags > 40 from a single tagger
+outvals<-subset(outvals,(meanTags>100) | (meanTags>40 & numTaggers==1))
+# Now we correct the counts for these outlier maps by using the 99% value of a negative binomial distribution applied to the set of values for the hour
+counts<-countByQ
+for(mm in outvals$regionMapId){
+	hv<-subset(outvals,regionMapId==mm)$Hour
+	outh<-subset(counts, RShour==hv)	
+	dv<-fitdist(outh$estNumSeals,"nbinom")$estimate
+	nmv<-qnbinom(0.99,mu=dv[2],size=dv[1])
+	counts$estNumSeals<-ifelse(counts$regionMapId==mm,nmv,counts$estNumSeals)
+}
+
+p2<-ggplot(counts,aes(x=RShour,y=estNumSeals))+geom_boxplot(aes(color=satId)) + geom_hline(yintercept=40)
+p3<-ggplot(counts,aes(x=RShour,y=estNumSeals))+geom_boxplot() + geom_hline(yintercept=40)
+
+## And estimate again...
+inflQ<-0.99
+estByRegionQ<-as.data.frame(counts[,c("region","lclNumSeals","estNumSeals","uclNumSeals")] %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflQ),estNumSeals=ceiling(sum(estNumSeals)*inflQ),uclNumSeals=ceiling(sum(uclNumSeals)*inflQ)))
+estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)*inflQ),estNumSeals=round(sum(countByQ$estNumSeals)*inflQ),uclNumSeals=round(sum(countByQ$uclNumSeals)*inflQ)))
+print(estByRegionQ)
+pq<-ggplot(subset(counts,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflQ)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(counts$estNumSeals*inflQ)
+
+#Apply the inflation:
+counts$estNumSeals<-round(counts$estNumSeals*inflQ)
+counts$uclNumSeals<-round(counts$uclNumSeals*inflQ)
+counts$lclNumSeals<-round(counts$lclNumSeals*inflQ)
+
+## Careful! this takes time!
+ntdf<-ldply(.data=unique(countByQ$regionMapId),.fun=function(m,views,tags){
+			mv<-subset(views,regionMapId==m)
+			numViews<-nrow(mv)
+			mt<-subset(tags,regionMapViewId %in% unique(mv$regionMapViewId))
+			numTaggers<-NROW(unique(mt$taggerId))
+			totalTags<-nrow(mt)
+			tdf<-data.frame(regionMapId=m,numViews=numViews,totalTags=totalTags,avgTags=(totalTags/numTaggers))
+		},views=views,tags=tags)
+
+counts<-merge(counts,ntdf,by="regionMapId",all.x=T)
+
+#Correcting for hour effect by fitting the sinusoidal:
+counts$scaledTotalTags<-scale(counts$totalTags); counts$scaledTotalTags<-as.numeric(counts$scaledTotalTags)
+counts$scaledAvgTags<-scale(counts$avgTags); counts$scaledAvgTags<-as.numeric(counts$scaledAvgTags)
+
+## Our base model:
+mdlb<-lm(estNumSeals~region+satId+scaledAvgTags+numViews+numTaggers+region*scaledAvgTags+region:scaledTotalTags+satId*scaledAvgTags+year,data=counts) 	#No year effects
+
+hourdf<-data.frame(model="base",aicv=AIC(mdlb), bicv=BIC(mdlb), lmdlv=logLik(mdlb), dfv=nrow(counts)-mdlb$df.residual)
+
+for(hh in 3:21){
+	df<-counts
+	df$numHour<-((as.integer(counts$RShour)-12) %% hh)/hh  #We test various moduli
+	sindf<-unique(df[,c("RShour","numHour")])
+	sindf$sinH<-sin(2*pi*sindf$numHour)
+	df<-merge(df,sindf[,c("RShour","sinH")],by="RShour",all.x=T)
+	
+	mdlh<-lm(estNumSeals~region+satId+scaledAvgTags+numViews+numTaggers+region*scaledAvgTags+region:scaledTotalTags+satId*scaledAvgTags+sinH+I(sinH^2),data=df)
+	hdf<-data.frame(model=paste0("mod",hh),aicv=AIC(mdlh), bicv=BIC(mdlh), lmdlv=logLik(mdlh), dfv=nrow(counts)-mdlh$df.residual)
+	hourdf<-rbind(hourdf,hdf)
+	
+}
+hourdf<-hourdf[order(hourdf$aicv),]
+
+#looks like modulus 8 is best!!
+df<-counts
+df$numHour<-((as.integer(counts$RShour)-12) %% 8)/8  #We test various moduli
+sindf<-unique(df[,c("RShour","numHour")])
+sindf$sinH<-sin(2*pi*sindf$numHour)
+df<-merge(df,sindf[,c("RShour","sinH")],by="RShour",all.x=T)
+mdlh<-lm(estNumSeals~region+satId+scaledAvgTags+numViews+numTaggers+region*scaledAvgTags+region:scaledTotalTags+satId*scaledAvgTags+sinH+I(sinH^2),data=df)
+
+#For each hour's records, calculate the error (distance to predicted), then predict to a particular hour, and add the error to the prediction
+df$predicted<-predict(mdlh)
+df$resid<-mdlh$residuals
+
+#########################################
+##Find the best hour to predict to:
+dfh<-unique(df[,c("RShour","sinH")])
+dfh$region<-"RSS"; dfh$satId<-"WV02"; dfh$scaledAvgTags<-0; dfh$scaledTotalTags<-0; dfh$numViews<-9; dfh$numTaggers<-2
+dfh$predicted<-predict(mdlh,newdata=dfh)
+dfh[order(dfh$predicted),]
+## RShour=20, sinH=0
+#########################################
+
+newdat<-df[,c("regionMapId","RShour","region","satId","scaledAvgTags","scaledTotalTags","numViews","numTaggers","resid","predicted","estNumSeals","lclNumSeals","uclNumSeals")]
+newdat$propL<-newdat$lclNumSeals/newdat$estNumSeals
+newdat$propU<-newdat$uclNumSeals/newdat$estNumSeals
+newdat$sinH<-0
+newdat$predictH<-predict(mdlh,newdata=newdat)
+newdat$estimateH<-newdat$predictH+newdat$resid
+newdat$lowerH<-newdat$estimateH*newdat$propL
+newdat$upperH<-newdat$estimateH*newdat$propU
+#Print these!
+estByRegionQ<-as.data.frame(newdat[,c("region","lowerH","estimateH","upperH")] %>% group_by(region) %>% dplyr::summarize(lower=ceiling(sum(lowerH)),estimate=ceiling(sum(estimateH)),upper=ceiling(sum(upperH))))
+estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lower=round(sum(newdat$lowerH)),estimate=round(sum(newdat$estimateH)),upper=round(sum(newdat$upperH))))
+print(estByRegionQ)
+
+dff<-merge(df,newdat[,c("regionMapId","estimateH","lowerH","upperH")],by="regionMapId",all.x=T)
+dff<-dff[,which(!names(dff) %in% c("wgtEstNumSeals","wgtUclNumSeals","wgtLclNumSeals"))]
+
+
+#Finally, calculte the estimates using the island model, then predict using the colony model assuming all are island, then all mainland, and then do a 90%/10% average
+## Can use dff or df - both correcting models include sinH and predict the detection rate: estimate/actual count.  
+## So, once we have the predicted detection rate, we divide by the estimate to obtain the inflated count
+## We predict assuming each map is from each of the colonies, and then average, weighing the mainland colonies at 10%, all others at 90%
+## The island model is: mdlIsl<-lm(detRate~scaledNumTags+sinH+I(sinH^2)+Island+acYear,data=numSealsF)
+## We predict 100% as islands, 100% as mainland, then add up with 90% weight to island colonies.
+## All this is done in the adjustCounts_withDetectionRate.R
+
+
+
+save(estByRegionQ, estByRegionQG, countByQ, countByQG, counts, df, dff, ntdf, file=paste0(pathToLocalGit,"estimatesByMap_unadjusted.RData"))
 
