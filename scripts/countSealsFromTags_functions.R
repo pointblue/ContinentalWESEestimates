@@ -275,7 +275,7 @@ getMapEstimates<-function(cdf,crthr=0.5,taggers,nSealsFilt=10,tgvutm,maps,overla
 	propUpper<-distvals$vupper/meanCorrF
 	propLower<-distvals$vlower/meanCorrF
 	
-	sdf$taggerEstNumSeals<-ceiling(sdf$numTags*meanCorrF)
+	sdf$taggerEstNumSeals<-round(sdf$numTags*meanCorrF)
 	
 	if(is.data.frame(indivCFdf)){
 		#here re-calculate the values for those individuals that count too high
@@ -373,9 +373,9 @@ fitDistLimits<-function(dist="gamma",qdf,parn,cival=95){
 ## NOTE: We replace scaledNumTags by scaledAvgTags; we use -1.391183 for scaledNumMaps, which is the equivalent of 1 map; we use acYear to be the year field
 ## keyFieldName is the unique record identifier. We use: "regionMapId" as default
 ## islandWeight is the proportion of "island" colonies in the data, defaults to 90% but likely less?
-predictDetRates<-function(dat,keyFieldName="regionMapId",islandWeight=0.9){
+predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=0.9){
 	## Load the models:
-	load(file="//prbo.org/Data/Home/Petaluma/lsalas/Documents/lsalas/Antarctica/SealsFromSpace/MethodsPaper/finalModelsAndData.RData")
+	load(file=paste0(pathToGit,"scripts/finalModelsAndData.RData"))
 	
 	## Get the colony and island info df
 	colIsldf<-unique(numSealsF[,c("Colony","Island")])
@@ -384,10 +384,11 @@ predictDetRates<-function(dat,keyFieldName="regionMapId",islandWeight=0.9){
 	sumWeights<-sum(colIsldf$weightVal)
 	
 	## Base dataset:
-	bdf<-dat[,c(keyFieldName,"scaledAvgTags","sinH","year")]
+	bdf<-dat[,c(keyFieldName,"scaledAvgTags","year")]
 	names(bdf)<-gsub("scaledAvgTags","scaledNumTags",names(bdf))
-	bdf$scaledNumMaps<-0	#-1.391183
-	bdf$acYear<-"2010"	#as.character(bdf$year)
+	bdf$sinH<-0	#we already corrected for hour effect
+	bdf$scaledNumMaps<-0	#assuming no effect frm number of maps, because we only have 1 image per location
+	bdf$acYear<-as.character(bdf$year)
 	
 	## The colony model is: mdlCol<-lm(detRate~scaledNumTags*scaledNumMaps+sinH+I(sinH^2)+Colony+acYear,data=numSealsF)
 	## We predict assuming each map is from each of the colonies, and then average, weighing the mainland colonies at 1-islandWeight, all others at islandWeight
