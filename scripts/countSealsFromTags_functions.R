@@ -375,7 +375,7 @@ fitDistLimits<-function(dist="gamma",qdf,parn,cival=95){
 ## islandWeight is the proportion of "island" colonies in the data, defaults to 90% but likely less?
 predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=0.9){
 	## Load the models:
-	load(file=paste0(pathToGit,"scripts/finalModelsAndData.RData"))
+	load(file=paste0(pathToGit,"data/finalModelsAndData.RData"))
 	
 	## Get the colony and island info df
 	colIsldf<-unique(numSealsF[,c("Colony","Island")])
