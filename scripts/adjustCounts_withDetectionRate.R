@@ -15,7 +15,7 @@ source("C:/Users/lsalas/git/ContinentalWESEestimates/scripts/countSealsFromTags_
 load(file=paste0(pathToLocalGit,"estimatesByMap_unadjusted.RData"))
 
 ## Adjusting the estimates for differences with ground counts is done with call to this function:
-adjRates<-predictDetRates(dat=df,keyFieldName="regionMapId",islandWeight=0.98)
+adjRates<-predictDetRates(pathToGit=pathToLocalGit,dat=df,keyFieldName="regionMapId",islandWeight=0.98)
 ## Here we are saying that 90% of the colonies out there are island colonies
 ## Two methods: assuming all colonies are line those in Erebus Bay, weighing the average by the proportion of island/mainland colonies, or...
 ## simply using a model that corrects for island or mainland, using the Erebus data as refrence
