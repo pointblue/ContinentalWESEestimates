@@ -220,44 +220,67 @@ wwt<-subset(ww,taggerId %in% tcdf$taggerId) 	#all the counts from the high tagge
 wwm<-subset(ww,regionMapId %in% wwt$regionMapId)	#all the map counts from maps inspected by the high taggers
 wwm$highTagger<-ifelse(wwm$taggerId %in% tcdf$taggerId,"Yes","No")
 
-#let's try to visualize how much hogher these taggers count...
+#let's try to visualize how much higher these taggers count...
 ndf<-aggregate(tagCount~regionMapId+highTagger,subset(wwm,highTagger=="No"),max)
 ydf<-subset(wwm,highTagger=="Yes" & regionMapId %in% ndf$regionMapId,select=c("regionMapId","highTagger","tagCount"))
 pdf<-rbind(ndf,ydf)
-ggplot(pdf,aes(x=tagCount)) + geom_density() + facet_wrap(~highTagger,scales="free")
+ggplot(pdf,aes(x=tagCount)) + geom_histogram(binwidth=20) + facet_wrap(~highTagger,scales="free")
 ## The Yes taggers (high taggers) have much larger numbers!
+## But these are not unusual when their counts are low
+ggplot(subset(pdf,highTagger=="Yes" & tagCount<100),aes(x=tagCount)) + geom_histogram(binwidth=20)
 
-## For these hightaggers, use the mean from the qvals/corrfactors for those in the appropriate gspm and correct their counts individually.
+## So, we want to remove their high counts for a map if the map has been inspected by at least 3 other taggers
+## We then use their own Qval for when they cannot be removed
+
+## Removing the removable high counts
+tcdff<-ldply(.data=unique(tcdf$regionMapId), .fun=function(m,tcdf){
+			ttdf<-subset(tcdf,regionMapId==m)
+			nr<-nrow(ttdf)
+			nh<-unique(ttdf$totalViews)
+			if(nh<(nr+2)){
+				rdf<-ttdf
+			}else{
+				rdf<-data.frame(regionTaggerId=NA, region=NA, regionMapId=NA, tagCount=NA, totalViews=NA)
+			}
+			
+		},tcdf=tcdf)
+tcdff<-na.omit(tcdff)
+tcdfr<-subset(tcdf,!regionMapId %in% tcdff$regionMapId)
+tcdfr$taggerMap<-paste0(tcdfr$regionTaggerId,":",tcdfr$regionMapId)
+## Confirming:
+orv<-nrow(tgvutm)
+tgvutm<-subset(tgvutm,!paste0(regionTaggerId,":",regionMapId) %in% tcdfr$taggerMap)
+nrow(tgvutm)==orv-sum(tcdfr$tagCount)	## TRUE
 
 
-## So, we get numbers again and evaluate again - using the general estimates for Qval:
-indivQdf<-subset(gspmQ,regionTaggerId %in% tcdf$regionTaggerId, select=c("regionTaggerId","Qval"))
-unique(subset(tcdf,!regionTaggerId %in% indivQdf$regionTaggerId)$regionTaggerId)   ## Do we have value for all? No.
-indivQdf<-rbind(indivQdf,data.frame(regionTaggerId=unique(subset(tcdf,!regionTaggerId %in% indivQdf$regionTaggerId)$regionTaggerId),Qval=mean(indivQdf$Qval)))   ## For the missing we use the average of the highTaggers for which we have Qvals/corrFactors
+## So, we get numbers again and evaluate again - using the general estimates for Qval plus the individual estimates for the high count taggers:
+indivQdf<-subset(gspmQ,regionTaggerId %in% tcdff$regionTaggerId, select=c("regionTaggerId","Qval"))
+unique(subset(tcdff,!regionTaggerId %in% indivQdf$regionTaggerId)$regionTaggerId)   ## Do we have value for all? No.
+indivQdf<-rbind(indivQdf,data.frame(regionTaggerId=unique(subset(tcdff,!regionTaggerId %in% indivQdf$regionTaggerId)$regionTaggerId),Qval=mean(indivQdf$Qval)))   ## For the missing we use the average of the highTaggers for which we have Qvals/corrFactors
 countByQ<-getMapEstimates(cdf=gspmQ,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerQval",dist="weibull",regional=TRUE,indivCFdf=indivQdf,cival=cival)
 estByRegionQ<-as.data.frame(countByQ %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
 estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)),estNumSeals=round(sum(countByQ$estNumSeals)),uclNumSeals=round(sum(countByQ$uclNumSeals))))
 print(estByRegionQ)
 
 ## If we were to use the general form:
-indivQdf<-subset(gspmQG,taggerId %in% tcdf$taggerId, select=c("taggerId","Qval"))
-unique(subset(tcdf,!taggerId %in% indivQdf$taggerId)$taggerId)   
-indivQdf<-rbind(indivQdf,data.frame(taggerId=unique(subset(tcdf,!taggerId %in% indivQdf$taggerId)$taggerId),Qval=mean(indivQdf$Qval)))   
+indivQdf<-subset(gspmQG,taggerId %in% tcdff$taggerId, select=c("taggerId","Qval"))
+unique(subset(tcdff,!taggerId %in% indivQdf$taggerId)$taggerId)   
+indivQdf<-rbind(indivQdf,data.frame(taggerId=unique(subset(tcdff,!taggerId %in% indivQdf$taggerId)$taggerId),Qval=mean(indivQdf$Qval)))   
 countByQG<-getMapEstimates(cdf=gspmQG,crthr=0.5,taggers=subtaggers,nSealsFilt=8,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerQval",dist="weibull",regional=FALSE,indivCFdf=indivQdf,cival=cival)
 estByRegionQG<-as.data.frame(countByQG %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
 estByRegionQG<-rbind(estByRegionQG,data.frame(region="Total",lclNumSeals=round(sum(countByQG$lclNumSeals)),estNumSeals=round(sum(countByQG$estNumSeals)),uclNumSeals=round(sum(countByQG$uclNumSeals))))
 print(estByRegionQG)
 
 ## And if we used the region-specific ss values:
-indivCFdf<-subset(gspm,regionTaggerId %in% tcdf$regionTaggerId, select=c("regionTaggerId","corrFactor"))
-unique(subset(tcdf,!regionTaggerId %in% indivCFdf$regionTaggerId)$regionTaggerId)   
-indivCFdf<-rbind(indivCFdf,data.frame(regionTaggerId=unique(subset(tcdf,!regionTaggerId %in% indivCFdf$regionTaggerId)$regionTaggerId),corrFactor=mean(indivCFdf$corrFactor)))   
+indivCFdf<-subset(gspm,regionTaggerId %in% tcdff$regionTaggerId, select=c("regionTaggerId","corrFactor"))
+unique(subset(tcdff,!regionTaggerId %in% indivCFdf$regionTaggerId)$regionTaggerId)   
+indivCFdf<-rbind(indivCFdf,data.frame(regionTaggerId=unique(subset(tcdff,!regionTaggerId %in% indivCFdf$regionTaggerId)$regionTaggerId),corrFactor=mean(indivCFdf$corrFactor)))   
 countBySS<-getMapEstimates(cdf=gspm,crthr=0.5,taggers=subtaggers,tgvutm=tgvutm,maps=maps,overlays=overlays,corrMethod="taggerCorrFactor",dist="gamma",regional=TRUE,indivCFdf=indivCFdf,cival=cival)
 estByRegionSS<-as.data.frame(countBySS %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
 estByRegionSS<-rbind(estByRegionSS,data.frame(region="Total",lclNumSeals=round(sum(countBySS$lclNumSeals)),estNumSeals=round(sum(countBySS$estNumSeals)),uclNumSeals=round(sum(countBySS$uclNumSeals))))
 print(estByRegionSS)
 
-## However, these numbers are probably too high - according to this graph,  ~38% too high
+## However, these numbers are probably too low - according to this graph
 countBySS<-merge(countBySS,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
 ggplot(subset(countBySS,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
 summary(countBySS$estNumSeals)
@@ -267,13 +290,13 @@ summary(countBySS$estNumSeals)
 countByQ<-merge(countByQ,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
 ggplot(subset(countByQ,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
 summary(countByQ$estNumSeals)
-## Seems to underestimate by 25%
+## Seems to underestimate by 30%
 
 ## The general method is still best - does not over-estimate, values are more precise (though less accurate than countBySS)
 countByQG<-merge(countByQG,mlCounts[,c("regionMapId","mlcount")],by="regionMapId",all.x=T)
 ggplot(subset(countByQG,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
 summary(countByQG$estNumSeals)
-## Seems to underestimate by 30%
+## Seems to underestimate by 34%
 
 ## one of two things are happening:
 # 1)	The general sample used to generate the correction factors is really not representative and overall results in the underestimate we see; or…
@@ -284,7 +307,7 @@ summary(countByQG$estNumSeals)
 # In other words, we have evidence for case #1 above. We have no evidence for case #2.
 
 ## So...
-inflQ<-1.315
+inflQ<-1.385
 estByRegionQ<-as.data.frame(countByQ %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflQ),estNumSeals=ceiling(sum(estNumSeals)*inflQ),uclNumSeals=ceiling(sum(uclNumSeals)*inflQ)))
 estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)*inflQ),estNumSeals=round(sum(countByQ$estNumSeals)*inflQ),uclNumSeals=round(sum(countByQ$uclNumSeals)*inflQ)))
 print(estByRegionQ)
@@ -292,7 +315,7 @@ pq<-ggplot(subset(countByQ,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflQ)) 
 summary(countByQ$estNumSeals*inflQ)
 
 ## Or...
-inflQG<-1.42
+inflQG<-1.48
 estByRegionQG<-as.data.frame(countByQG %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflQG),estNumSeals=ceiling(sum(estNumSeals)*inflQG),uclNumSeals=ceiling(sum(uclNumSeals)*inflQG)))
 estByRegionQG<-rbind(estByRegionQG,data.frame(region="Total",lclNumSeals=round(sum(countByQG$lclNumSeals)*inflQG),estNumSeals=round(sum(countByQG$estNumSeals)*inflQG),uclNumSeals=round(sum(countByQG$uclNumSeals)*inflQG)))
 print(estByRegionQG)
@@ -300,12 +323,16 @@ pqg<-ggplot(subset(countByQG,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflQG
 summary(countByQG$estNumSeals*inflQG)
 
 ## Or..
-inflSS<-1.46
+inflSS<-1.54
 estByRegionSS<-as.data.frame(countBySS %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflSS),estNumSeals=ceiling(sum(estNumSeals)*inflSS),uclNumSeals=ceiling(sum(uclNumSeals)*inflSS)))
 estByRegionSS<-rbind(estByRegionSS,data.frame(region="Total",lclNumSeals=round(sum(countBySS$lclNumSeals)*inflSS),estNumSeals=round(sum(countBySS$estNumSeals)*inflSS),uclNumSeals=round(sum(countBySS$uclNumSeals)*inflSS)))
 print(estByRegionSS)
 pss<-ggplot(subset(countBySS,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflSS)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
 summary(countBySS$estNumSeals*inflSS)
+
+## countByQ is the top choice!
+## Some estimates are still a bit high:
+summary(countByQ$estNumSeals*inflQ)
 
 
 ## Adjust countByQ and countByQG - we will use countByQ
@@ -313,25 +340,13 @@ countByQ$estNumSeals<-round(countByQ$estNumSeals*inflQ)
 countByQ$uclNumSeals<-round(countByQ$uclNumSeals*inflQ)
 countByQ$lclNumSeals<-round(countByQ$lclNumSeals*inflQ)
 
-countByQG$estNumSeals<-round(countByQG$estNumSeals*inflQG)
-countByQG$uclNumSeals<-round(countByQG$uclNumSeals*inflQG)
-countByQG$lclNumSeals<-round(countByQG$lclNumSeals*inflQG)
-
 ## Need to add year and hour of the day to the results (Ross Sea time - NZDT), and map lat/lon
-## PDT to NZDT is +19 hrs
-## PST to NZDT is +21 hrs
-makeRSdate<-function(x){
-	tzn<-format(x,"%Z")
-	if(tzn=="PST"){
-		ndt<-as.POSIXlt(x,tz="Pacific/Auckland")
-	}
-}
 nrow(countByQ)
 countByQ<-merge(countByQ,unique(overlays[,c("overlayId","acquisition_date")]),by="overlayId",all.x=TRUE)
 nrow(countByQ)
 countByQ$originHour<-format(countByQ$acquisition_date,"%H")
 countByQ$originTZ<-format(countByQ$acquisition_date,"%Z")
-countByQ$RSdate<-as.POSIXlt(countByQ$acquisition_date,tz="Pacific/Auckland")
+countByQ$RSdate<-as.POSIXlt(countByQ$acquisition_date,tz="Pacific/Auckland")	#convert to RS time zone
 countByQ$RShour<-format(countByQ$RSdate,"%H")
 countByQ<-merge(countByQ,maps[,c("regionMapId","mapcoords.x1","mapcoords.x2")],by="regionMapId",all.x=TRUE)
 pdf<-countByQ
@@ -340,25 +355,26 @@ pdf$abBin2<-ifelse(pdf$estNumSeals<40,"Under 40","Over 40")
 pdf$wvq<-ifelse(pdf$satId=="QB02","QB","WV")
 ggplot(pdf,aes(x=estNumSeals)) + geom_histogram(aes(fill=satId),position="dodge",binwidth=4) + facet_wrap(~abBin2,scales="free") + labs(x="Seals per map",y="Number of maps")
 
+# It does not look like it's a satellite thing the high numbers...
+
 # We can see that under 40 the distributions among satIds are the same for WV01, for WV02, and for QB (only 9 maps from GE01)
-# The problem is the counts in 23 maps above 40 seals (out of 17,453!)
+# The problem is the counts in 30 maps above 40 seals (out of 17,453!)
 aggregate(regionMapId~satId,pdf,NROW)
 
-#### FOR THE RECORD, the real problem is the large number of 1-seal maps - imperfect detection (seals diving!)
-
-# SO: maybe we don't need to worry much about these 23 maps, or we can shrink them to the mean of the hour:
-p1<-ggplot(countByQ,aes(x=RShour,y=estNumSeals))+geom_boxplot(aes(color=satId)) + geom_hline(yintercept=40)
-# Note the 6 outliers
-outs<-subset(countByQ,estNumSeals>40)
+# SO: maybe we don't need to worry about these maps with > 40 seals, or we can shrink them to the mean of the hour:
+p1<-ggplot(countByQ,aes(x=RShour,y=estNumSeals))+geom_boxplot() + geom_hline(yintercept=40)
+# Note the outliers
 # The value for WV01 on the 21st hour is NOT credible, from only 1 tagger
 g<-subset(tags,regionMapViewId %in% unique(subset(views,regionMapId=="RSS1255032")$regionMapViewId))
-aggregate(tagId~regionTaggerId,g,NROW)
+tt<-aggregate(tagId~regionTaggerId,g,NROW);names(tt)<-c("regionTaggerId","tagCount");print(tt)
 
 # The value for WV1 for the 4th hour is also not credible - only 1 tagger
 g<-subset(tags,regionMapViewId %in% unique(subset(views,regionMapId=="RSS938501")$regionMapViewId))
-aggregate(tagId~regionTaggerId,g,NROW)
+tt<-aggregate(tagId~regionTaggerId,g,NROW);names(tt)<-c("regionTaggerId","tagCount");print(tt)
 
-# More generally, we can choose to trust values where there were 3 or more taggers
+
+# More generally, we can't trust any value with mean tags > 100, and we can't trust any value with tags > 40 from a single tagger
+outs<-subset(countByQ,estNumSeals>40)
 outvals<-ldply(.data=outs$regionMapId,.fun=function(mm,outs,tags,views){
 			g<-subset(tags,regionMapViewId %in% unique(subset(views,regionMapId==mm)$regionMapViewId))
 			tou<-subset(outs,regionMapId==mm)
@@ -368,10 +384,9 @@ outvals<-ldply(.data=outs$regionMapId,.fun=function(mm,outs,tags,views){
 			return(tdf)
 		},outs=outs,tags=tags,views=views)
 outvals$Hour<-as.character(outvals$Hour)
-
-# We can't trust any value with mean tags > 100, and we can't trust any value with tags > 40 from a single tagger
 outvals<-subset(outvals,(meanTags>100) | (meanTags>40 & numTaggers==1))
-# Now we correct the counts for these outlier maps by using the 99% value of a negative binomial distribution applied to the set of values for the hour
+
+# Now we correct the counts for these outlier map counts by using the 99% value of a negative binomial distribution applied to the set of values for the hour
 counts<-countByQ
 for(mm in outvals$regionMapId){
 	hv<-subset(outvals,regionMapId==mm)$Hour
@@ -385,18 +400,14 @@ p2<-ggplot(counts,aes(x=RShour,y=estNumSeals))+geom_boxplot(aes(color=satId)) + 
 p3<-ggplot(counts,aes(x=RShour,y=estNumSeals))+geom_boxplot() + geom_hline(yintercept=40)
 
 ## And estimate again...
-inflQ<-0.99
-estByRegionQ<-as.data.frame(counts[,c("region","lclNumSeals","estNumSeals","uclNumSeals")] %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)*inflQ),estNumSeals=ceiling(sum(estNumSeals)*inflQ),uclNumSeals=ceiling(sum(uclNumSeals)*inflQ)))
-estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)*inflQ),estNumSeals=round(sum(countByQ$estNumSeals)*inflQ),uclNumSeals=round(sum(countByQ$uclNumSeals)*inflQ)))
+# NOTE: we inflated the counts already, don't need to do it again - this is to adjust for the 30 over-estimated maps
+estByRegionQ<-as.data.frame(counts[,c("region","lclNumSeals","estNumSeals","uclNumSeals")] %>% group_by(region) %>% dplyr::summarize(lclNumSeals=ceiling(sum(lclNumSeals)),estNumSeals=ceiling(sum(estNumSeals)),uclNumSeals=ceiling(sum(uclNumSeals))))
+estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lclNumSeals=round(sum(countByQ$lclNumSeals)),estNumSeals=round(sum(countByQ$estNumSeals)),uclNumSeals=round(sum(countByQ$uclNumSeals))))
 print(estByRegionQ)
-pq<-ggplot(subset(counts,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals*inflQ)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
-summary(counts$estNumSeals*inflQ)
+pq<-ggplot(subset(counts,!is.na(mlcount)),aes(x=mlcount,y=estNumSeals)) + geom_point() + geom_abline(slope=1,intercept=0, color="blue") + stat_smooth(method="lm",se=F, formula=y~x-1,color="red")
+summary(counts$estNumSeals)
 
-#Apply the inflation:
-counts$estNumSeals<-round(counts$estNumSeals*inflQ)
-counts$uclNumSeals<-round(counts$uclNumSeals*inflQ)
-counts$lclNumSeals<-round(counts$lclNumSeals*inflQ)
-
+##HERE!!
 ## Careful! this takes time!
 ntdf<-ldply(.data=unique(countByQ$regionMapId),.fun=function(m,views,tags){
 			mv<-subset(views,regionMapId==m)
@@ -414,7 +425,8 @@ counts$scaledTotalTags<-scale(counts$totalTags); counts$scaledTotalTags<-as.nume
 counts$scaledAvgTags<-scale(counts$avgTags); counts$scaledAvgTags<-as.numeric(counts$scaledAvgTags)
 
 ## Our base model:
-mdlb<-lm(estNumSeals~region+satId+scaledAvgTags+numViews+numTaggers+region*scaledAvgTags+region:scaledTotalTags+satId*scaledAvgTags+year,data=counts) 	#No year effects
+mdlb<-lm(estNumSeals~region+satId+scaledAvgTags+numViews+numTaggers+region*scaledAvgTags+region:scaledTotalTags+satId*scaledAvgTags+year,data=counts) 	
+#No year effects - we add the sinusoidal effect to this
 
 hourdf<-data.frame(model="base",aicv=AIC(mdlb), bicv=BIC(mdlb), lmdlv=logLik(mdlb), dfv=nrow(counts)-mdlb$df.residual)
 
@@ -432,9 +444,9 @@ for(hh in 3:21){
 }
 hourdf<-hourdf[order(hourdf$aicv),]
 
-#looks like modulus 8 is best!!
+#looks like modulus 4 is best! Since the colony and island/mainland models were built with a 12hr modulus, we are here removing the hour effect
 df<-counts
-df$numHour<-((as.integer(counts$RShour)-12) %% 8)/8  #We test various moduli
+df$numHour<-((as.integer(counts$RShour)-12) %% 4)/4  #We use 4 as best modulus
 sindf<-unique(df[,c("RShour","numHour")])
 sindf$sinH<-sin(2*pi*sindf$numHour)
 df<-merge(df,sindf[,c("RShour","sinH")],by="RShour",all.x=T)
@@ -458,16 +470,16 @@ newdat$propL<-newdat$lclNumSeals/newdat$estNumSeals
 newdat$propU<-newdat$uclNumSeals/newdat$estNumSeals
 newdat$sinH<-0
 newdat$predictH<-predict(mdlh,newdata=newdat)
-newdat$estimateH<-newdat$predictH+newdat$resid
-newdat$lowerH<-newdat$estimateH*newdat$propL
-newdat$upperH<-newdat$estimateH*newdat$propU
+newdat$estimateH<-round(newdat$predictH+newdat$resid)
+newdat$lowerH<-round(newdat$estimateH*newdat$propL)
+newdat$upperH<-round(newdat$estimateH*newdat$propU)
 #Print these!
 estByRegionQ<-as.data.frame(newdat[,c("region","lowerH","estimateH","upperH")] %>% group_by(region) %>% dplyr::summarize(lower=ceiling(sum(lowerH)),estimate=ceiling(sum(estimateH)),upper=ceiling(sum(upperH))))
 estByRegionQ<-rbind(estByRegionQ,data.frame(region="Total",lower=round(sum(newdat$lowerH)),estimate=round(sum(newdat$estimateH)),upper=round(sum(newdat$upperH))))
 print(estByRegionQ)
 
-dff<-merge(df,newdat[,c("regionMapId","estimateH","lowerH","upperH")],by="regionMapId",all.x=T)
-dff<-dff[,which(!names(dff) %in% c("wgtEstNumSeals","wgtUclNumSeals","wgtLclNumSeals"))]
+df<-merge(df,newdat[,c("regionMapId","estimateH","lowerH","upperH")],by="regionMapId",all.x=T)
+df<-df[,which(!names(df) %in% c("wgtEstNumSeals","wgtUclNumSeals","wgtLclNumSeals"))]
 
 
 #Finally, calculte the estimates using the island model, then predict using the colony model assuming all are island, then all mainland, and then do a 90%/10% average
@@ -480,5 +492,5 @@ dff<-dff[,which(!names(dff) %in% c("wgtEstNumSeals","wgtUclNumSeals","wgtLclNumS
 
 
 
-save(estByRegionQ, estByRegionQG, countByQ, countByQG, counts, df, dff, ntdf, file=paste0(pathToLocalGit,"estimatesByMap_unadjusted.RData"))
+save(estByRegionQ, estByRegionQG, countByQ, countByQG, counts, df, ntdf, file=paste0(pathToLocalGit,"estimatesByMap_unadjusted.RData"))
 
