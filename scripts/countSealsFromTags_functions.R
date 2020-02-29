@@ -388,7 +388,7 @@ predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=
 	names(bdf)<-gsub("scaledAvgTags","scaledNumTags",names(bdf))
 	bdf$sinH<-0	#we already corrected for hour effect
 	bdf$scaledNumMaps<-0	#assuming no effect frm number of maps, because we only have 1 image per location
-	bdf$acYear<-as.character(bdf$year)
+	bdf$acYear<-"2010"
 	
 	## The colony model is: mdlCol<-lm(detRate~scaledNumTags*scaledNumMaps+sinH+I(sinH^2)+Colony+acYear,data=numSealsF)
 	## We predict assuming each map is from each of the colonies, and then average, weighing the mainland colonies at 1-islandWeight, all others at islandWeight
