@@ -373,7 +373,7 @@ fitDistLimits<-function(dist="gamma",qdf,parn,cival=95){
 ## NOTE: We replace scaledNumTags by scaledAvgTags; we use -1.391183 for scaledNumMaps, which is the equivalent of 1 map; we use acYear to be the year field
 ## keyFieldName is the unique record identifier. We use: "regionMapId" as default
 ## islandWeight is the proportion of "island" colonies in the data, defaults to 90% but likely less?
-predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=0.9){
+predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=0.9, yr="2010"){
 	## Load the models:
 	load(file=paste0(pathToGit,"data/finalModelsAndData.RData"))
 	
@@ -384,14 +384,15 @@ predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=
 	sumWeights<-sum(colIsldf$weightVal)
 	
 	## Base dataset:
-	bdf<-dat[,c(keyFieldName,"scaledAvgTags","year")]
-	names(bdf)<-gsub("scaledAvgTags","scaledNumTags",names(bdf))
+	bdf<-dat[,c(keyFieldName,"scaledNumTags","year")]
 	bdf$sinH<-0	#we already corrected for hour effect
 	bdf$scaledNumMaps<-0	#assuming no effect frm number of maps, because we only have 1 image per location
-	bdf$acYear<-"2010"
 	
 	## The colony model is: mdlCol<-lm(detRate~scaledNumTags*scaledNumMaps+sinH+I(sinH^2)+Colony+acYear,data=numSealsF)
 	## We predict assuming each map is from each of the colonies, and then average, weighing the mainland colonies at 1-islandWeight, all others at islandWeight
+	
+	## For 2010
+	bdf$acYear<-"2010"
 	cdf<-ldply(.data=colIsldf$Colony, .fun=function(x,colIsldf,bdf,mdlCol){
 				colWgt<-subset(colIsldf,Colony==x)$weightVal
 				tdf<-bdf
@@ -415,7 +416,37 @@ predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=
 			},bdf=bdf,mdlIsl=mdlIsl,islandWeight=islandWeight)
 	islMdlEst<-aggregate(as.formula(paste0("wgtPredIslRate~",keyFieldName)),data=idf,sum)
 	
-	dfRate<-merge(colMdlEst,islMdlEst,by=keyFieldName)
+	dfRate10<-merge(colMdlEst,islMdlEst,by=keyFieldName)
+	dfRate10$Year<-"2010"
+	
+	## For 2011
+	bdf$acYear<-"2011"
+	cdf<-ldply(.data=colIsldf$Colony, .fun=function(x,colIsldf,bdf,mdlCol){
+				colWgt<-subset(colIsldf,Colony==x)$weightVal
+				tdf<-bdf
+				tdf$Colony<-x
+				tdf$wgtPredColRate<-predict(mdlCol,newdata=tdf)
+				tdf$wgtPredColRate<-tdf$wgtPredColRate*colWgt
+				return(tdf)
+			},colIsldf=colIsldf,bdf=bdf,mdlCol=mdlCol)
+	colMdlEst<-aggregate(as.formula(paste0("wgtPredColRate~",keyFieldName)),data=cdf,sum)
+	colMdlEst$wgtPredColRate<-colMdlEst$wgtPredColRate/sumWeights
+	
+	## The island model is: mdlIsl<-lm(detRate~scaledNumTags+sinH+I(sinH^2)+Island+acYear,data=numSealsF)
+	## We predict 100% as islands, 100% as mainland, then add up with 90% weight to island colonies.
+	idf<-ldply(.data=c(0,1), .fun=function(x,bdf,mdlIsl,islandWeight){
+				tdf<-bdf
+				tdf$Island<-x
+				islWgt<-ifelse(x==0,1-islandWeight,islandWeight)
+				tdf$wgtPredIslRate<-predict(mdlIsl,newdata=tdf)
+				tdf$wgtPredIslRate<-tdf$wgtPredIslRate*islWgt
+				return(tdf)
+			},bdf=bdf,mdlIsl=mdlIsl,islandWeight=islandWeight)
+	islMdlEst<-aggregate(as.formula(paste0("wgtPredIslRate~",keyFieldName)),data=idf,sum)
+	
+	dfRate11<-merge(colMdlEst,islMdlEst,by=keyFieldName)
+	dfRate11$Year<-"2011"
+	dfRate<-rbind(dfRate10,dfRate11)
 	return(dfRate)
 	
 }

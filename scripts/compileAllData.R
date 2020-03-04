@@ -3,7 +3,7 @@
 # Author: lsalas
 ###############################################################################
 
-libs<-c("raster","rgdal","plyr","dplyr","sp","rgeos")
+libs<-c("raster","rgdal","plyr","dplyr","sp","rgeos","fitdistrplus")
 lapply(libs, require, character.only = TRUE)
 
 ######################  FUNCTIONS WE'LL NEED
@@ -159,6 +159,81 @@ tags<-subset(tags,(regionMapViewId %in% unique(views$regionMapViewId)) & (region
 overlays<-subset(overlays,overlayId %in% unique(maps$overlayId))
 aois<-subset(aois,overlayId %in% unique(maps$overlayId))
 #No need to subset crowd or taggers
+
+#####################################
+#filtering for crazy counts:
+tg<-tags; tg$tagCount<-1
+tg<-merge(tg,views[,c("regionMapViewId","regionMapId")],by="regionMapViewId",all.x=T)
+tgcounts<-aggregate(tagCount~regionMapId+regionTaggerId+region+year+regionMapViewId,tg,sum)
+sum(tgcounts$tagCount>100)  #44 cases in 40 maps
+NROW(unique(subset(tgcounts,tagCount>100)$regionMapId))/nrow(tgcounts)  #47 mapviews out of 35,932, or 0.09%
+## CAREFUL: there are repeated views of the same map by the same tagger, with different viewIds - here we consider them as independent
+tcdf<-ldply(.data=unique(subset(tgcounts,tagCount>100)$regionMapId), .fun=function(z,tgcounts,views){
+			ovis<-NROW(unique(subset(tgcounts,regionMapId==z)$regionMapViewId))
+			mval<-subset(tgcounts,tagCount>100 & regionMapId==z)
+			mval<-mval[,c("regionTaggerId","region","regionMapId","regionMapViewId","tagCount")]
+			mval$totalViews<-ovis
+			return(mval)
+		},tgcounts=tgcounts,views=views)
+tcdf<-tcdf[order(tcdf$regionMapId),]
+print(tcdf)		#Note the many cases where there are 4+ views and only one is wrong
+## We remove the erroneous counts for maps with 4+ views... (these are 36 of the 47 views!)
+tcdff<-ldply(.data=unique(tcdf$regionMapId), .fun=function(m,tcdf){
+			ttdf<-subset(tcdf,regionMapId==m)
+			nr<-nrow(ttdf)
+			nh<-unique(ttdf$totalViews)
+			if(nh<(nr+3)){
+				rdf<-ttdf
+			}else{
+				rdf<-data.frame(regionTaggerId=unique(ttdf$regionTaggerId), region=unique(ttdf$region), regionMapId=unique(ttdf$regionMapId), regionMapViewId=unique(ttdf$regionMapViewId),tagCount=NA, totalViews=NA)
+			}
+			
+		},tcdf=tcdf)
+tcdff$mapTagger<-paste0(tcdff$regionMapId,":",tcdff$regionTaggerId)
+tcz<-subset(tcdff,is.na(tagCount))
+tgcounts$mapTagger<-paste0(tgcounts$regionMapId,":",tgcounts$regionTaggerId)
+tcz$mapTagger<-paste0(tcz$regionMapId,":",tcz$regionTaggerId)
+tg$mapTagger<-paste0(tg$regionMapId,":",tg$regionTaggerId)
+## now removing from tags - confirm and then remove
+tg<-subset(tg,!mapTagger %in% tcz$mapTagger)
+nrow(tags)-nrow(subset(tg,!mapTagger %in% tcz$mapTagger))==sum(subset(tgcounts,mapTagger %in% tcz$mapTagger)$tagCount)
+tags<-subset(tags,regionTagId %in% tg$regionTagId)
+nrow(tags)==nrow(tg)
+## need to remove the views too, and if these are the only views of these taggers, well, then the taggers too... Luckily this is not the case, so no need to remove the taggers
+views<-subset(views,!regionMapViewId %in% tcz$regionMapViewId)
+#####################################
+## Finding the 99% percentile value of tag counts...
+gd<-fitdist(log(tgcounts$tagCount), "norm", method="mle")
+est99<-ceiling(qnorm(0.99,mean=gd$estimate[1],sd=gd$estimate[2])) 	# 4 tags is the result
+####################################
+## Now for the remaining erroneous 5 views, use the larger value of all other views of the same map, or est99
+## All views of the same map, or est99
+tcdff<-subset(tcdff,!is.na(tagCount))
+tcdfc<-ldply(.data=1:nrow(tcdff), .fun=function(rr,tcdff,tgcounts,est99){
+			adf<-tcdff[rr,]
+			rmid<-adf$regionMapId
+			cdf<-subset(tgcounts,regionMapId==rmid & tagCount<100)
+			if(nrow(cdf)==0){
+				nval<-est99
+			}else{
+				nval<-ifelse(max(cdf$tagCount)>est99,max(cdf$tagCount),est99)
+			}
+			adf$newVal<-nval
+			return(adf)
+		},tcdff=tcdff,tgcounts=tgcounts,est99=est99)
+tga<-subset(tg,regionMapViewId %in% tcdfc$regionMapViewId)
+tgb<-subset(tg,!regionMapViewId %in% tcdfc$regionMapViewId)
+tgaa<-ldply(.data=tcdfc$regionMapViewId, .fun=function(vv,tga,tcdfc){
+			adf<-subset(tga,regionMapViewId==vv)
+			nrw<-subset(tcdfc,regionMapViewId==vv)$newVal
+			return(adf[1:nrw,])
+		},tga=tga,tcdfc=tcdfc)
+tgc<-rbind(tgaa,tgb)
+## confirm we did it right, then apply
+(nrow(tg)-nrow(tgc)) == (sum(tcdfc$tagCount)-sum(tcdfc$newVal))
+tags<-subset(tags,regionTagId %in% tgc$regionTagId)
+nrow(tags)==nrow(tgc)
+
 
 #######################################
 ## Now converting tag coordinates to UTM.
