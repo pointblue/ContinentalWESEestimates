@@ -251,9 +251,8 @@ getTaggerProbabilities_fromQ_general<-function(rankdata,crthr,taggersSel,tagsSel
 ## corrMethod is a string: either taggerQval or taggerCorrFactor
 ## dist is the distribution to fit to the values of correction factors
 ## regional is a boolean that informs if a general or region-specific estimate of the correction is being used
-## indivCFdf is a data.frame of correction values for counters that count too high - would not be a problem if we could afford not to use them
 ## cival indicates the cofidence limits, defaults to 95%
-getMapEstimates<-function(cdf,crthr=0.5,taggers,nSealsFilt=10,tgvutm,maps,overlays,corrMethod,dist="gamma",regional=FALSE,indivCFdf=NA,cival=95){
+getMapEstimates<-function(cdf,crthr=0.5,taggers,nSealsFilt=10,tgvutm,maps,overlays,corrMethod,dist="gamma",regional=FALSE,cival=95){
 	if(corrMethod=="taggerQval"){
 		cdf<-subset(cdf,nSeals>=nSealsFilt)
 		parn<-"Qval"
@@ -276,20 +275,6 @@ getMapEstimates<-function(cdf,crthr=0.5,taggers,nSealsFilt=10,tgvutm,maps,overla
 	propLower<-distvals$vlower/meanCorrF
 	
 	sdf$taggerEstNumSeals<-round(sdf$numTags*meanCorrF)
-	
-	if(is.data.frame(indivCFdf)){
-		#here re-calculate the values for those individuals that count too high
-		for(ii in 1:(nrow(indivCFdf))){
-			idpar<-ifelse(regional==FALSE,"taggerId","regionTaggerId")
-			itid<-indivCFdf[ii,idpar]
-			indivMeanCorrF<-indivCFdf[ii,parn]
-			for(rr in 1:nrow(sdf)){
-				if(sdf[rr,idpar]==itid){
-					sdf[rr,"taggerEstNumSeals"]<-ceiling(sdf[rr,"numTags"]*indivMeanCorrF)
-				}
-			}
-		}
-	}
 	
 	sdf$taggerUclNumSeals<-ceiling(sdf$taggerEstNumSeals*propUpper)
 	sdf$taggerLclNumSeals<-ceiling(sdf$taggerEstNumSeals*propLower)

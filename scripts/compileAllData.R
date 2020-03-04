@@ -234,6 +234,21 @@ tgc<-rbind(tgaa,tgb)
 tags<-subset(tags,regionTagId %in% tgc$regionTagId)
 nrow(tags)==nrow(tgc)
 
+## Removing repeated views
+## There is abunch of views that are identical except for the assigned mapViewId. Removing the duplicates from the tags and views tables...
+tv<-merge(tags,views[,c("regionMapId","regionMapViewId")],by="regionMapViewId",all.x=T)
+tv$mapTagger<-paste0(tv$regionMapId,":",tv$regionTaggerId)
+rdf<-unique(tv[,c("mapTagger","regionMapViewId")])
+rvdf<-data.frame()
+for(rr in unique(rdf$mapTagger)){
+	tdf<-subset(rdf,mapTagger==rr)
+	if(nrow(tdf)>1){
+		rvdf<-rbind(rvdf,tdf[-1,])	#this has the unique views we want to delete
+	}
+}
+tags<-subset(tags,!regionMapViewId %in% rvdf$regionMapViewId)
+views<-subset(views,!regionMapViewId %in% rvdf$regionMapViewId)
+
 
 #######################################
 ## Now converting tag coordinates to UTM.
