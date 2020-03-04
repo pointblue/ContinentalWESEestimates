@@ -24,15 +24,20 @@ adjRates<-predictDetRates(pathToGit=pathToLocalGit,dat=df,keyFieldName="regionMa
 countdf<-merge(df,adjRates,by="regionMapId")
 
 ## Since detectionRate = count-in-map/count-on-the-ground, and we want count-on-the-ground, then we divide the count-in-map/detectionRate
-countdf$mdlColEstimate<-round(countdf$estNumSeals/countdf$wgtPredColRate)
-countdf$mdlIslEstimate<-round(countdf$estNumSeals/countdf$wgtPredIslRate)
+countdf$mdlColEstimate<-round(countdf$estimateH/countdf$wgtPredColRate)
+countdf$mdlColUpper<-round(countdf$upperH/countdf$wgtPredColRate)
+countdf$mdlColLower<-round(countdf$lowerH/countdf$wgtPredColRate)
 
-summary(countdf$wgtPredColRate)
-summary(countdf$wgtPredIslRate)
+countdf$mdlIslEstimate<-round(countdf$estimateH/countdf$wgtPredIslRate)
+countdf$mdlIslUpper<-round(countdf$upperH/countdf$wgtPredColRate)
+countdf$mdlIslLower<-round(countdf$lowerH/countdf$wgtPredColRate)
 
-sum(countdf$mdlColEstimate)
-sum(countdf$mdlIslEstimate)
 
+estByRegionCol<-as.data.frame(countdf[,c("region","mdlColLower","mdlColEstimate","mdlColUpper")] %>% group_by(region) %>% dplyr::summarize(Lower=round(sum(mdlColLower)),Estimate=round(sum(mdlColEstimate)),Upper=round(sum(mdlColUpper))))
+estByRegionCol<-rbind(estByRegionCol,data.frame(region="Total",Lower=round(sum(countdf$mdlColLower)),Estimate=round(sum(countdf$mdlColEstimate)),Upper=round(sum(countdf$mdlColUpper))))
+print(estByRegionCol)
+
+save(countdf,file=paste0(pathTogit,"data/correctedCounts.RData"))
 ## Use 95% and Colony model
 ## Prepare data for regression model
 ## Setup the notebook
