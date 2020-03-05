@@ -358,7 +358,7 @@ fitDistLimits<-function(dist="gamma",qdf,parn,cival=95){
 ## NOTE: We replace scaledNumTags by scaledAvgTags; we use -1.391183 for scaledNumMaps, which is the equivalent of 1 map; we use acYear to be the year field
 ## keyFieldName is the unique record identifier. We use: "regionMapId" as default
 ## islandWeight is the proportion of "island" colonies in the data, defaults to 90% but likely less?
-predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=0.9, yr="2010"){
+predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=0.9){
 	## Load the models:
 	load(file=paste0(pathToGit,"data/finalModelsAndData.RData"))
 	
@@ -369,7 +369,7 @@ predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=
 	sumWeights<-sum(colIsldf$weightVal)
 	
 	## Base dataset:
-	bdf<-dat[,c(keyFieldName,"scaledNumTags","year")]
+	bdf<-dat[,c(keyFieldName,"scaledNumTags")]
 	bdf$sinH<-0	#we already corrected for hour effect
 	bdf$scaledNumMaps<-0	#assuming no effect frm number of maps, because we only have 1 image per location
 	
