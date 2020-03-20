@@ -87,7 +87,7 @@ wdf<-wesedf[,c("regionMapId","tagCount","coords.x1","coords.x2")]
 ## Now we aggregate the estimated number of seals per map and calculate the average elat lon for the map too.
 weddellMaps<-as.data.frame(wdf %>% group_by(regionMapId) %>% 
 				dplyr::summarize(lclNumSeals=sum(tagCount),estNumSeals=sum(tagCount),uclNumSeals=sum(tagCount),mapcoords.x1=mean(coords.x1),mapcoords.x2=mean(coords.x2)))
-weddellMaps<-merge(weddellMaps,wesedf[,c("regionMapId","acquisition_date")],by="regionMapId",all.x=T)
+weddellMaps<-merge(weddellMaps,unique(wesedf[,c("regionMapId","acquisition_date")]),by="regionMapId",all.x=T)
 
 weddellMaps$region<-"WAP"
 weddellMaps$satId<-"WV02"

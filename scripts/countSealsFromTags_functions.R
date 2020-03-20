@@ -437,4 +437,29 @@ predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=
 }
 
 
+## The following function attributes the WESE counts with the cell ID of a 5-km grid cell for geospatial analyses of habitat selection
+## It then adds up the counts of seals per 5-km grid cell and returns the resulting table
+## gdf is the spatialpoints data.frame
+## wesedf is the data.frame of counts of seals by map
+getWESEcountsBy5km<-function(gdf,wesedf){
+	pdf<-as.data.frame(gdf)
+	wcoords<-wesedf[,c("regionMapId","mapcoords.x1","mapcoords.x2")]
+	coordinates(wcoords)<-c("mapcoords.x1","mapcoords.x2")
+	proj4string(wcoords)<-CRS("+proj=longlat +datum=WGS84")
+	wdf<-spTransform(wcoords,CRS(projection(gdf)))
+	wdf<-as.data.frame(wdf)
+	
+	#Find the closest gpoint to each wpoint
+	wgdf<-unique(wdf[,c("regionMapId","mapcoords.x1","mapcoords.x2")])
+	wgdf$pointid<-NA
+	for(m in 1:nrow(wgdf)){
+		mc1<-wgdf[m,"mapcoords.x1"];mc2<-wgdf[m,"mapcoords.x2"]
+		pdf$dist<-sqrt(((pdf$coords.x1-mc1)^2)+((pdf$coords.x2-mc2)^2))
+		pdf<-pdf[order(pdf$dist),]
+		ncId<-pdf[1,"pointid"]
+		wgdf[m,"pointid"]<-ncId
+	}
+	return(wgdf)
+}
+
 
