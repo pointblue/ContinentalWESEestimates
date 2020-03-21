@@ -443,6 +443,7 @@ predictDetRates<-function(pathToGit,dat,keyFieldName="regionMapId",islandWeight=
 ## wesedf is the data.frame of counts of seals by map
 getWESEcountsBy5km<-function(gdf,wesedf){
 	pdf<-as.data.frame(gdf)
+	pdf$pointid<-as.integer(as.character(pdf$pointid))
 	wcoords<-wesedf[,c("regionMapId","mapcoords.x1","mapcoords.x2")]
 	coordinates(wcoords)<-c("mapcoords.x1","mapcoords.x2")
 	proj4string(wcoords)<-CRS("+proj=longlat +datum=WGS84")
