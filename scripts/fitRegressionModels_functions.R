@@ -228,9 +228,9 @@ summarizeResults<-function(fitobj,what="coefs"){
 		resdf<-data.frame(Parameter=parnams,Coefficient=avgcoef,StError=avgste,t_value=avgtval,Prob_t=avgpval,Nboot=nbt)
 	}
 	if(what=="gof"){
-		gofdf<-fitobj$coefs
+		gofdf<-fitobj$gofs;nbt<-nrow(gofdf)
 		gofres<-apply(X=gofdf, MARGIN=2, "mean")
-		resdf<-data.frame(Parameter=names(gofdf),Value=gofres)
+		resdf<-data.frame(Parameter=names(gofdf),Value=gofres,Nboot=nbt)
 	}
 	if(what=="resids"){
 		residsdf<-fitobj$resids
