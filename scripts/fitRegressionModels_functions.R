@@ -156,7 +156,7 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 	#outputs: a df with each column being the residuals from each model fit
 	
 	mdllst<-llply(.data=datalist, .fun=function(dd,fml,fam){
-				if(fam=="gausian"){
+				if(fam=="gaussian"){
 					mdl<-lm(formula=fml,data=dd)
 				}else{
 					mdl<-glm(formula=fml,data=dd,family=fam)
@@ -196,6 +196,11 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 	names(residdf)<-paste("resMdl",1:ndat,sep="_")
 	for(rr in 1:ndat){
 		resids<-mdllst[[rr]]$residuals
+		if(NROW(resids)<nrec){
+			diffrec<-nrec-NROW(resids)
+			padres<-rep(NA,times=diffrec)
+			resids<-c(resids,padres)
+		}
 		residdf[,rr]<-resids
 	}
 		
