@@ -204,9 +204,38 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 		residdf[,rr]<-resids
 	}
 		
-	res<-list(coefs=coeflst,gofs=gofdf,resids=residdf)
+	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf)
 	
 	return(res)
 		
+}
+
+## This function summarizes the results from fitting a model to an ensemble of data with the fitModelToBootstrap function
+## fitobj is the object resulting from the fitModelToBootstrap function
+## what indicates what we want to summarize: coefs, gof, resids
+summarizeResults<-function(fitobj,what="coefs"){
+	resdf<-"Nothing summarized. Make sure to use the function for the results of fitModelToBootstrap, with 'what' being either one of: 'coefs' (default), 'gof', or 'resids'."
+	if(what=="coefs"){
+		obj<-fitobj$coefs
+		#this has 4 data.frames, one each for: coefficients, standard errors, t-values and p-values
+		#each data frame has as many rows as there are coefficients, and as many columns as there are bootstrap samples
+		#so, we calculate the average of each data.frame across columns, and then cbind the results
+		coefdf<-obj$Coefficients;avgcoef<-apply(X=coefdf,MARGIN=2,"mean")
+		parnams<-names(avgcoef); nbt<-ncol(coefdf)
+		stedf<-obj$St.Errors;avgste<-apply(X=stedf,MARGIN=2,"mean")
+		tvaldf<-obj$t_values;avgtval<-apply(X=tvaldf,MARGIN=2,"mean")
+		pvaldf<-obj$p_values;avgpval<-apply(X=pvaldf,MARGIN=2,"mean")
+		resdf<-data.frame(Parameter=parnams,Coefficient=avgcoef,StError=avgste,t_value=avgtval,Prob_t,avgpval,Nboot=nbt)
+	}
+	if(what=="gof"){
+		gofdf<-fitobj$coefs
+		gofres<-apply(X=gofdf, MARGIN=1, "mean")
+		resdf<-data.frame(Parameter=names(gofdf),Value=gofres)
+	}
+	if(what=="resids"){
+		residsdf<-fitobj$resids
+		resdf<-apply(X=residsdf, MARGIN=2, "mean")
+	}
+	return(resdf)
 }
 
