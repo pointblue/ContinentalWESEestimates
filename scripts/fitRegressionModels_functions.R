@@ -225,7 +225,7 @@ summarizeResults<-function(fitobj,what="coefs"){
 		stedf<-obj$St.Errors;avgste<-apply(X=stedf,MARGIN=2,"mean")
 		tvaldf<-obj$t_values;avgtval<-apply(X=tvaldf,MARGIN=2,"mean")
 		pvaldf<-obj$p_values;avgpval<-apply(X=pvaldf,MARGIN=2,"mean")
-		resdf<-data.frame(Parameter=parnams,Coefficient=avgcoef,StError=avgste,t_value=avgtval,Prob_t,avgpval,Nboot=nbt)
+		resdf<-data.frame(Parameter=parnams,Coefficient=avgcoef,StError=avgste,t_value=avgtval,Prob_t=avgpval,Nboot=nbt)
 	}
 	if(what=="gof"){
 		gofdf<-fitobj$coefs
