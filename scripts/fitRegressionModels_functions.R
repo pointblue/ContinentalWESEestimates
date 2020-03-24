@@ -221,7 +221,7 @@ summarizeResults<-function(fitobj,what="coefs"){
 		#each data frame has as many rows as there are coefficients, and as many columns as there are bootstrap samples
 		#so, we calculate the average of each data.frame across columns, and then cbind the results
 		coefdf<-obj$Coefficients;avgcoef<-apply(X=coefdf,MARGIN=2,"mean")
-		parnams<-names(avgcoef); nbt<-ncol(coefdf)
+		parnams<-names(avgcoef); nbt<-nrow(coefdf)
 		stedf<-obj$St.Errors;avgste<-apply(X=stedf,MARGIN=2,"mean")
 		tvaldf<-obj$t_values;avgtval<-apply(X=tvaldf,MARGIN=2,"mean")
 		pvaldf<-obj$p_values;avgpval<-apply(X=pvaldf,MARGIN=2,"mean")
@@ -229,12 +229,12 @@ summarizeResults<-function(fitobj,what="coefs"){
 	}
 	if(what=="gof"){
 		gofdf<-fitobj$coefs
-		gofres<-apply(X=gofdf, MARGIN=1, "mean")
+		gofres<-apply(X=gofdf, MARGIN=2, "mean")
 		resdf<-data.frame(Parameter=names(gofdf),Value=gofres)
 	}
 	if(what=="resids"){
 		residsdf<-fitobj$resids
-		resdf<-apply(X=residsdf, MARGIN=2, "mean")
+		resdf<-apply(X=residsdf, MARGIN=1, "mean")
 	}
 	return(resdf)
 }
