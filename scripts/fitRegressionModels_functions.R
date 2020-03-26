@@ -24,7 +24,7 @@ readShapeFile<-function(pathToGit,folderName="glaciers",shapeName="glaciers"){
 ## This function overlaps the existing data.frame with a spatial polygons object to get attribution from the polygons
 ## shpobj is the spatial data object from which we will attribute
 ## attribName is the name of a field in shpobj that will be used to attribute dat
-## dat is the data.frame we want to attribute
+## data is the data.frame we want to attribute
 ## datKey is a unique key for the table dat, usually (and expected to be) gridCellId
 ## lonfld and latfld are the names of lon and lat fields (or their equivalents if projected) in dat
 ## datproj is the projection of the dat file, in PROJ format
@@ -35,7 +35,7 @@ attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,l
 	if(!TRUE %in% c(attribName %in% shpNames)){
 		datdf<-paste("ERROR: the variable",attribName,"was not found in the shape object. Check spelling?")
 	}else{
-		datNames<-names(dat)
+		datNames<-names(data)
 		if(!TRUE %in% c(lonfld %in% datNames) | !TRUE %in% c(latfld %in% datNames)){
 			datdf<-paste("ERROR: either",latfld,"or",lonfld,"or both were not found in the data file. Check spelling?")
 		}else{
@@ -43,9 +43,9 @@ attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,l
 				datdf<-paste("ERROR: the key",datKey,"was not found in the data file. Check spelling?")
 			}else{
 				#make spatial points from dat
-				spp<-dat[,c(datKey,lonfld,latfld)]
-				coordinates(spp)<-c(londf,latfld)
-				proj4string(spp)<-CRS(datproj)
+				spp<-data[,c(datKey,lonfld,latfld)]
+				coordinates(spp)<-c(lonfld,latfld)
+				proj4string(spp)<-CRS(dataproj)
 				
 				#reproject to shape
 				shpprj<-projection(shpobj)
@@ -58,7 +58,7 @@ attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,l
 				names(sppdf)<-gsub("attribVal",attribName,names(sppdf))
 				
 				#merge attributed df to original dat
-				datdf<-merge(datdf,sppdf[,c(datKey,attribName)],by=datKey,all.x=TRUE)
+				datdf<-merge(data,sppdf[,c(datKey,attribName)],by=datKey,all.x=TRUE)
 			}
 		}		
 	}
@@ -94,7 +94,7 @@ bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClust
 		data$presence<-ifelse(data$presence>0,1,0)
 		if(hasMapsBehavior==0){
 			pres<-subset(data,presence==1)
-			abst<-subset(data,abundance==0)
+			abst<-subset(data,presence==0)
 		}else{
 			pres<-subset(data,hasMap==1);pres$presence<-1
 			abst<-subset(data,hasMap==0)
