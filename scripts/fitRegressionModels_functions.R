@@ -239,3 +239,33 @@ summarizeResults<-function(fitobj,what="coefs"){
 	return(resdf)
 }
 
+## This function generates a subset of the grid cell data, for only the Weddell Sea
+## data is the continent-wide data.frame of WESE grid cell data
+getWeddellSeaData<-function(data){
+	#get coordinate values in lonlat for easier filtering
+	gdf<-data[,c("gridCellId","coords.x1","coords.x2")]
+	coordinates(gdf)<-c("coords.x1","coords.x2")
+	projection(gdf)<-CRS(dataproj)
+	ggdf<-spTransform(gdf,CRS("+proj=longlat +datum=WGS84"))
+	ggdf<-as.data.frame(ggdf)
+	names(ggdf)<-c("gridCellId","lon","lat")
+	gdf<-merge(gdf,ggdf,by="gridCellId",all.x=T)
+	
+	#now filter for the Weddell Sea only
+	wdsdf<-subset(gdf,lon > -66 & lon < -10 & lat < -64)	
+	
+	#there are still some cells on the western side of the peninsula, removing these
+	cdf<-as.data.frame(wdsdf)[,c("gridCellId","coords.x1","coords.x2")];
+	names(cdf)<-c("gridCellId","cv1","cv2")
+	wdsdf<-merge(wdsdf,cdf,by="gridCellId",all.x=T)
+	wdsdf<-subset(wdsdf,(cv1 > -2335000) | ((cv1 <= -2335000 & cv1 > -2410000) & cv2 > 1155000) | ((cv1 <= -2410000 & cv1 > -2455000) & cv2 > 1250000))
+	
+	#now filtering original data and adding the binary
+	wesedf<-subset(data,gridCellId %in% wdsdf$gridCellId)
+	wesedf<-wesedf[,which(!names(wesedf) %in% c("mdlIsl","hasMaps","RegionName"))]
+	names(wesedf)<-gsub("mdlCol","abundance",names(wesedf))
+	wesedf$presence<-ifelse(wesedf$abundance>0,1,0)
+	
+	return(wesedf)
+	
+}
