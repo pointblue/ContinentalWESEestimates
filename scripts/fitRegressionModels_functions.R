@@ -75,6 +75,23 @@ attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,l
 ## countVar is the name of the count variable in the data, either mdlCol or mdlIsl
 ## setBinomial indicates if the outpout samples are binomial presence/absence or abundance (default)
 bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClusters=0,countVar="mdlCol",setBinomial=FALSE){
+	#must first subset the data to cells <= the largest distance within each region
+	if(hasMapsBehavior==0){ #this is the default and correct behavior
+		posdata<-subset(data,mdlCol>0)
+		negdata<-subset(data,mdlCol==0)
+	}else{
+		posdata<-subset(data,hasMaps==1)
+		negdata<-subset(data,hasMaps==0)
+	}
+	negdf<-ldply(unique(data$Region),function(rr,negdata,posdata){
+				regneg<-subset(negdata,Region==rr)
+				regpos<-subset(posdata,Region==rr)
+				maxdistShore<-max(regpos$distToShore)
+				regneg<-subset(regneg,distToShore<=maxdistShore)
+				return(regneg)
+			},negdata=negdata,posdata=posdata)
+	
+	data<-rbind(posdata,negdf)	
 	#limit the clustering to max 5
 	kv<-stratifyByClusters;if(kv>5){kv<-5}
 	
@@ -193,18 +210,23 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 	#better to dimension the residuals data.frame ahead of estimation...
 	ndat<-NROW(datalist);nrec<-nrow(datalist[[1]])
 	residdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
+	predsdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
 	names(residdf)<-paste("resMdl",1:ndat,sep="_")
+	names(predsdf)<-paste("predMdl",1:ndat,sep="_")
 	for(rr in 1:ndat){
 		resids<-mdllst[[rr]]$residuals
+		preds<-mdllst[[rr]]$fitted.values
 		if(NROW(resids)<nrec){
 			diffrec<-nrec-NROW(resids)
 			padres<-rep(NA,times=diffrec)
 			resids<-c(resids,padres)
+			preds<-c(preds,padres)
 		}
 		residdf[,rr]<-resids
+		predsdf[,rr]<-preds
 	}
 		
-	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf)
+	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf,preds=predsdf)
 	
 	return(res)
 		
@@ -212,7 +234,7 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 
 ## This function summarizes the results from fitting a model to an ensemble of data with the fitModelToBootstrap function
 ## fitobj is the object resulting from the fitModelToBootstrap function
-## what indicates what we want to summarize: coefs, gof, resids
+## what indicates what we want to summarize: coefs, gof, residplot
 summarizeResults<-function(fitobj,what="coefs"){
 	resdf<-"Nothing summarized. Make sure to use the function for the results of fitModelToBootstrap, with 'what' being either one of: 'coefs' (default), 'gof', or 'resids'."
 	if(what=="coefs"){
@@ -225,16 +247,20 @@ summarizeResults<-function(fitobj,what="coefs"){
 		stedf<-obj$St.Errors;avgste<-apply(X=stedf,MARGIN=2,"mean")
 		tvaldf<-obj$t_values;avgtval<-apply(X=tvaldf,MARGIN=2,"mean")
 		pvaldf<-obj$p_values;avgpval<-apply(X=pvaldf,MARGIN=2,"mean")
-		resdf<-data.frame(Parameter=parnams,Coefficient=avgcoef,StError=avgste,t_value=avgtval,Prob_t=avgpval,Nboot=nbt)
+		resdf<-data.frame(Parameter=parnams,Coefficient=round(avgcoef,3),StError=round(avgste,3),t_value=round(avgtval,3),Prob_t=round(avgpval,3),Nboot=nbt)
 	}
 	if(what=="gof"){
 		gofdf<-fitobj$gofs;nbt<-nrow(gofdf)
 		gofres<-apply(X=gofdf, MARGIN=2, "mean")
 		resdf<-data.frame(Parameter=names(gofdf),Value=gofres,Nboot=nbt)
 	}
-	if(what=="resids"){
-		residsdf<-fitobj$resids
-		resdf<-apply(X=residsdf, MARGIN=1, "mean")
+	if(what=="residplot"){
+		residdf<-fitobj$resids
+		predsdf<-fitobj$preds
+		resdf<-ldply(1:ncol(residdf),function(cc,residdf,preddf){
+					tdf<-data.frame(bootstrap=cc,predicted=predsdf[,cc],residual=residdf[,cc])
+					return(tdf)
+				},residdf=residdf,preddf=preddf)
 	}
 	return(resdf)
 }
