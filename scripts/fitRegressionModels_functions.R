@@ -11,7 +11,6 @@
 ## folderName is the name of the folder containing the shape file
 ## shapeName is the name of the shape file (.shp)
 readShapeFile<-function(pathToGit,folderName="glaciers",shapeName="glaciers"){
-	library("rgdal");library("sp");library("rgeos")
 	dsnpth<-paste0(pathToGit,"data/",folderName)
 	if(file.exists(paste0(pathToGit,"data/",folderName,"/",shapeName,".shp"))){
 		shpobj<-readOGR(dsnpth,shapeName)
@@ -29,7 +28,6 @@ readShapeFile<-function(pathToGit,folderName="glaciers",shapeName="glaciers"){
 ## lonfld and latfld are the names of lon and lat fields (or their equivalents if projected) in dat
 ## datproj is the projection of the dat file, in PROJ format
 attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,latfld,dataproj){
-	library("sp");library("raster")
 	
 	shpNames<-names(shpobj)
 	if(!TRUE %in% c(attribName %in% shpNames)){
@@ -48,7 +46,7 @@ attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,l
 				proj4string(spp)<-CRS(dataproj)
 				
 				#reproject to shape
-				shpprj<-projection(shpobj)
+				shpprj<-proj4string(shpobj)
 				spp<-spTransform(spp,CRS(shpprj))
 				
 				#get over from shape to attribute with values of attribName
@@ -74,20 +72,17 @@ attributeWithShape<-function(shpobj,attribName,data,datKey="gridCellId",lonfld,l
 ## stratifyByClusters 
 ## countVar is the name of the count variable in the data, either mdlCol or mdlIsl
 ## setBinomial indicates if the outpout samples are binomial presence/absence or abundance (default)
-bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClusters=0,countVar="mdlCol",setBinomial=FALSE){
-	#limit the clustering to max 5
-	kv<-stratifyByClusters;if(kv>5){kv<-5}
-	
+bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClusters=0,clustByVars=NA,countVar="mdlCol",setBinomial=FALSE){
+	#must first subset the data to cells <= the largest distance within each region
 	#divide into presence and absence sets
 	#if hasMapsBehavior==1, then present = hasMap=1, not mdlCol/mdlIsl > 0
 	if(setBinomial==FALSE){
-		names(data)<-gsub(countVar,"abundance",names(data))
-		if(hasMapsBehavior==0){
-			pres<-subset(data,abundance>0)
-			abst<-subset(data,abundance==0)
+		if(hasMapsBehavior==0){ #this is the default and correct behavior
+			pres<-subset(data,mdlCol>0)
+			abst<-subset(data,mdlCol==0)
 		}else{
-			pres<-subset(data,hasMap==1)
-			abst<-subset(data,hasMap==0)
+			pres<-subset(data,hasMaps==1)
+			abst<-subset(data,hasMaps==0)
 		}
 	}else{
 		names(data)<-gsub(countVar,"presence",names(data))
@@ -99,51 +94,85 @@ bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClust
 			pres<-subset(data,hasMap==1);pres$presence<-1
 			abst<-subset(data,hasMap==0)
 		}
-		
 	}
+	negdf<-ldply(unique(data$Region),function(rr,abst,pres){
+				regneg<-subset(abst,Region==rr)
+				regpos<-subset(pres,Region==rr)
+				maxdistShore<-max(regpos$distToShore)
+				regneg<-subset(regneg,distToShore<=maxdistShore)
+				return(regneg)
+			},abst=abst,pres=pres)
+	abst<-negdf
+	
+	#Need to assign probs from normal of positives to the negs
+	fnrm<-fitdist(pres$logdistToShore, distr="norm")  #better fit than a gamma
+	abst$probDTS<-pnorm(abst$logdistToShore,mean=fnrm$estimate[1],sd=fnrm$estimate[2])
+	
+	#limit the clustering to max 5
+	kv<-stratifyByClusters;if(kv>5){kv<-5}
 	
 	psize<-nrow(pres)
 	
-	#if stratifyByClusters > 0, then 
-	if(stratifyByClusters==0){
+	if(stratifyByClusters==0 | is.na(clustByVars)){
 		abst$kval<-1
 	}else{
 		#create and add the cluster attributions to abst
 		library(cluster)
-		kmm<-kmeans(abst[,which(!names(abst) %in% c("gridCellId","nearLineId","near_x","near_y","adpecol","empecol","coords.x1","coords.x2","mdlCol","mdlIsl","hasMaps"))], 
-				centers=kv) 
+		kmm<-kmeans(abst[,which(names(abst) %in% clustByVars)], centers=kv) 
 		abst$kval<-kmm$cluster
 	}
-	binvals<-unique(abst$kval)	#this is the set of unique bin names
-	asizek<-round(psize/max(binvals))	#this is how much to survey from each cluster
+	binvals<-unique(abst$kval)#this is the set of unique bin names
+	asizek<-round(psize/max(binvals))#this is how much to survey from each cluster
 	#For each bootstrap:
 	nbdf<-abst[1:(2*psize),]
+	
+		
 	#dimensioning...
-	res<-llply(.data=1:nsamples, .fun=function(x,nbdf){
-				return(nbdf)
-			},nbdf=nbdf)
+	res<-llply(.data=1:nsamples, .fun=function(x,nbdf){return(nbdf)},nbdf=nbdf)
+		
 	for(x in 1:nsamples){
-		#sample with replacement from each cluster
-		if(max(binvals)==1){	#just take a random sample from absents of size psize
-			rv<-sample(1:nrow(abst),size=psize,replace=TRUE)
-			rdf<-abst[rv,]
-		}else{
-			#sample at random from each cluster, of size asizek, then combine into df
-			rdf<-ldply(.data=binvals, .fun=function(x,abst,asizek){
-						tdf<-subset(abst,kval==x)
-						rv<-sample(1:nrow(tdf),size=asizek,replce=TRUE)
-						ttdf<-tdf[rv,]
-						return(ttdf)
-					})
-		}
-		#add the presence data
-		rdf<-rbind(pres,rdf[,names(pres)])
+		rdf<-getBootSample(pres=pres,abst=abst,binvals=binvals,asizek=asizek)
 		res[[x]]<-rdf
-		#take the next sample
 	}
 	
 	#return the list
 	return(res)
+}
+
+## This function samples from a normal distribution to obtain a probability with which to sample from the distribution of negatives
+## The goal is to obtain a distribution of distances to shore from the negative data that resembles the distribution of the positives
+getBootSample<-function(pres,abst,binvals,asizek){
+	#take onse sample
+	rvals<-rnorm(nrow(pres),0.5,0.2)  #the sd comes from the CV of the above normal fit
+	rvals<-ifelse(rvals<0,-1*rvals,rvals)
+	rvals<-ifelse(rvals>1,0.5,rvals)
+	
+	#sample with replacement from each cluster
+	if(max(binvals)==1){	#just take a random sample from absents of size psize
+		rdf<-ldply(1:nrow(pres),function(rr,abst,rvals){
+					rv<-rvals[rr]
+					tdf<-subset(abst,probDTS<rv)
+					sdf<-tdf[sample(x=1:nrow(tdf),size=1),]
+					return(sdf)
+				},abst=abst,rvals=rvals)
+		
+	}else{
+		#sample at random from each cluster, of size asizek, then combine into df - even if cluster=1, could just sample from this side of the function only...
+		rdf<-ldply(.data=binvals, .fun=function(x,abst,rvals,asizek){
+					tdf<-subset(abst,kval==x)
+					krvals<-sample(rvals,size=asizek)
+					bsamp<-ldply(1:asizek,function(rr,abst,krvals){
+								rv<-rvals[rr]
+								tdf<-subset(abst,probDTS<rv)
+								sdf<-tdf[sample(x=1:nrow(tdf),size=1),]
+								return(sdf)
+							},abst=abst,krvals=krvals)
+					return(bsamp)
+				},abst=abst,rvals=rvals,asizek=asizek)
+		
+	}
+	rdf<-rdf[,which(names(rdf) %in% names(pres))]
+	return(rdf)
 }
 
 ## This function fits a regression model formula to a list of bootstrapped datasets, returning the mean coefficients, etc., and metrics of GOF
@@ -193,18 +222,23 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 	#better to dimension the residuals data.frame ahead of estimation...
 	ndat<-NROW(datalist);nrec<-nrow(datalist[[1]])
 	residdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
+	predsdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
 	names(residdf)<-paste("resMdl",1:ndat,sep="_")
+	names(predsdf)<-paste("predMdl",1:ndat,sep="_")
 	for(rr in 1:ndat){
 		resids<-mdllst[[rr]]$residuals
+		preds<-mdllst[[rr]]$fitted.values
 		if(NROW(resids)<nrec){
 			diffrec<-nrec-NROW(resids)
 			padres<-rep(NA,times=diffrec)
 			resids<-c(resids,padres)
+			preds<-c(preds,padres)
 		}
 		residdf[,rr]<-resids
+		predsdf[,rr]<-preds
 	}
 		
-	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf)
+	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf,preds=predsdf)
 	
 	return(res)
 		
@@ -212,7 +246,7 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 
 ## This function summarizes the results from fitting a model to an ensemble of data with the fitModelToBootstrap function
 ## fitobj is the object resulting from the fitModelToBootstrap function
-## what indicates what we want to summarize: coefs, gof, resids
+## what indicates what we want to summarize: coefs, gof, residplot
 summarizeResults<-function(fitobj,what="coefs"){
 	resdf<-"Nothing summarized. Make sure to use the function for the results of fitModelToBootstrap, with 'what' being either one of: 'coefs' (default), 'gof', or 'resids'."
 	if(what=="coefs"){
@@ -225,16 +259,20 @@ summarizeResults<-function(fitobj,what="coefs"){
 		stedf<-obj$St.Errors;avgste<-apply(X=stedf,MARGIN=2,"mean")
 		tvaldf<-obj$t_values;avgtval<-apply(X=tvaldf,MARGIN=2,"mean")
 		pvaldf<-obj$p_values;avgpval<-apply(X=pvaldf,MARGIN=2,"mean")
-		resdf<-data.frame(Parameter=parnams,Coefficient=avgcoef,StError=avgste,t_value=avgtval,Prob_t=avgpval,Nboot=nbt)
+		resdf<-data.frame(Parameter=parnams,Coefficient=round(avgcoef,3),StError=round(avgste,3),t_value=round(avgtval,3),Prob_t=round(avgpval,3),Nboot=nbt)
 	}
 	if(what=="gof"){
 		gofdf<-fitobj$gofs;nbt<-nrow(gofdf)
 		gofres<-apply(X=gofdf, MARGIN=2, "mean")
 		resdf<-data.frame(Parameter=names(gofdf),Value=gofres,Nboot=nbt)
 	}
-	if(what=="resids"){
-		residsdf<-fitobj$resids
-		resdf<-apply(X=residsdf, MARGIN=1, "mean")
+	if(what=="residplot"){
+		residdf<-fitobj$resids
+		predsdf<-fitobj$preds
+		resdf<-ldply(1:ncol(residdf),function(cc,residdf,preddf){
+					tdf<-data.frame(bootstrap=cc,predicted=predsdf[,cc],residual=residdf[,cc])
+					return(tdf)
+				},residdf=residdf,preddf=preddf)
 	}
 	return(resdf)
 }
@@ -245,7 +283,7 @@ getWeddellSeaData<-function(data){
 	#get coordinate values in lonlat for easier filtering
 	gdf<-data[,c("gridCellId","coords.x1","coords.x2")]
 	coordinates(gdf)<-c("coords.x1","coords.x2")
-	projection(gdf)<-CRS(dataproj)
+	proj4string(gdf)<-CRS(dataproj)
 	ggdf<-spTransform(gdf,CRS("+proj=longlat +datum=WGS84"))
 	ggdf<-as.data.frame(ggdf)
 	names(ggdf)<-c("gridCellId","lon","lat")
