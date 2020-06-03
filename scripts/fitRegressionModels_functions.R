@@ -377,40 +377,42 @@ getNewData<-function(varDesc,pdvars,useMedian=FALSE){
 ## This function generates a partial dependence dataset from the model bootstrap
 ## reslst is the list of models
 ## newdata is the data.frame to predict to
-## pdvar is the name of the partial dependence var to plot
+## pdvars is the name of the partial dependence var(s) to plot
 ## type indicates the type of model: lm or glm
-getpdData<-function(reslst,newdata,pdvar,type="glm"){
+getpdData<-function(reslst,newdata,pdvars,type="glm"){
 	if(type=="lm"){
-		resdf<-ldply(reslst$models,function(mm,newdata,pdvar){
+		resdf<-ldply(reslst$models,function(mm,newdata,pdvars){
 					mdl<-mm
 					preds<-as.data.frame(predict(mdl,newdata=newdata,interval="confidence"))
-					res<-as.data.frame(cbind(newdata[,pdvar],preds))
+					ttt<-as.data.frame(newdata[,pdvars]); names(ttt)<-pdvars
+					res<-as.data.frame(cbind(ttt,preds))
 					return(res)
-				}, newdata=newdata,pdvar=pdvar)
+				}, newdata=newdata,pdvars=pdvars)
 	}else if(type=="glm"){
-		resdf<-ldply(reslst$models,function(mm,newdata,pdvar){
+		resdf<-ldply(reslst$models,function(mm,newdata,pdvars){
 					mdl<-mm
 					preds<-predict(mdl,newdata=newdata,se.fit=TRUE)
 					tdf<-data.frame(fit=preds$fit,sefit=preds$se.fit)
 					tdf$lwr<-tdf$fit-(1.96*tdf$sefit)
 					tdf$upr<-tdf$fit+(1.96*tdf$sefit)
-					res<-as.data.frame(cbind(newdata[,pdvar],tdf))
+					ttt<-as.data.frame(newdata[,pdvars]); names(ttt)<-pdvars
+					res<-as.data.frame(cbind(ttt,tdf))
 					return(res)
-				}, newdata=newdata,pdvar=pdvar)
+				}, newdata=newdata,pdvars=pdvars)
 	}else{}
-	if(NROW(pdvar)==1){
-		names(resdf)<-gsub(pdvar,"predictor",names(resdf))
+	if(NROW(pdvars)==1){
+		names(resdf)<-gsub(pdvars,"predictor",names(resdf))
 		pddata<-resdf %>% group_by(predictor) %>% dplyr::summarise(predicted=mean(fit),lcl=min(lwr),ucl=max(upr))
-		names(pddata)<-gsub("predictor",pdvar,names(pddata))
+		names(pddata)<-gsub("predictor",pdvars,names(pddata))
 	}else{
-		names(resdf)<-gsub(pdvar[1],"predictor1",names(resdf))
-		names(resdf)<-gsub(pdvar[2],"predictor2",names(resdf))
+		names(resdf)<-gsub(pdvars[1],"predictor1",names(resdf))
+		names(resdf)<-gsub(pdvars[2],"predictor2",names(resdf))
 		pddata<-resdf %>% group_by(predictor1,predictor2) %>% dplyr::summarise(predicted=mean(fit),lcl=min(lwr),ucl=max(upr))
-		names(pddata)<-gsub("predictor1",pdvar[1],names(pddata))
-		names(pddata)<-gsub("predictor2",pdvar[2],names(pddata))
+		names(pddata)<-gsub("predictor1",pdvars[1],names(pddata))
+		names(pddata)<-gsub("predictor2",pdvars[2],names(pddata))
 	}
 	
-	return(pddata)
+	return(as.data.frame(pddata))
 }
 
 
