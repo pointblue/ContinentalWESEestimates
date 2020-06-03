@@ -307,3 +307,113 @@ getWeddellSeaData<-function(data){
 	return(wesedf)
 	
 }
+
+## This function returns the mean, median, min and max of every numeric variable in the data, and all levels of each factor
+## data is the dataset we use to bootstrap
+## fml is the formula used in the model
+getVarDesc<-function(data,fml){
+	fml<-as.formula(fml)
+	vars<-all.vars(fml[[3]])
+		
+	varDesc<-ldply(vars,function(nn,data){
+				if(is.numeric(data[,nn])){
+					minv<-min(data[,nn], na.rm = FALSE)
+					maxv<-max(data[,nn], na.rm = FALSE)
+					meanv<-mean(data[,nn], na.rm = FALSE)
+					medv<-median(data[,nn], na.rm = FALSE)
+					modv<-"NA"
+				}else{
+					modv<-as.character(toJSON(unique(data[,nn])))
+					minv<-NA;maxv<-NA;meanv<-NA;medv<-NA;modv<-modv
+				}
+				tdf<-data.frame(var=nn,minv=minv,maxv=maxv,meanv=meanv,medv=medv,modv=modv)
+				return(tdf)
+			},data=data)
+	
+	return(varDesc)
+}
+
+## This function generates a prediction df from var descriptions and 1-2 selected variables to plot
+## varDesc is the data frame returned by the function getVarDesc
+## pdvars is the character vector naming 1 or 2 variables to vary
+## useMedian is aboolean indicating if the median should be used instead of the mean for the fixed values of unvarying variables
+getNewData<-function(varDesc,pdvars,useMedian=FALSE){
+	if(NROW(pdvars)>2)stop("More than 2 variables to permutate?")
+	vd<-subset(varDesc,!var %in% pdvars)
+	pd<-subset(varDesc,var %in% pdvars)
+	nt<-NROW(pdvars)
+	nddf<-as.data.frame(matrix(rep(NA,times=nrow(vd)*100^nt), ncol=nrow(vd), byrow=F))
+	names(nddf)<-vd$var
+	for(vv in vd$var){
+		if(useMedian==FALSE){cv<-subset(vd,var==vv)$meanv}else{cv<-subset(vd,var==vv)$medv}
+		if(is.na(cv)){ #it's a factor - get the values and choose one at random
+			cv<-subset(vd,var==vv)$modv
+			modvals<-fromJSON(as.character(cv))
+			cv<-sample(modvals,1)
+		}
+		nddf[,vv]<-rep(cv,times=nrow(nddf))
+	}
+	if(nt==1){
+		vv<-as.character(pd$var)
+		miv<-subset(pd,var==vv)$minv
+		mav<-subset(pd,var==vv)$maxv
+		nddf[,vv]<-seq(from=miv,to=mav,length.out=100)
+	}else{
+		vvs<-as.character(pd$var)
+		miv<-subset(pd,var==vvs[1])$minv
+		mav<-subset(pd,var==vvs[1])$maxv
+		v1s<-seq(from=miv,to=mav,length.out=100)
+		miv<-subset(pd,var==vvs[2])$minv
+		mav<-subset(pd,var==vvs[2])$maxv
+		v2s<-seq(from=miv,to=mav,length.out=100)
+		vdf<-expand.grid(v1s,v2s)
+		names(vdf)<-vvs
+		nddf<-cbind(nddf,vdf)
+	}
+	
+	return(nddf)
+}
+
+## This function generates a partial dependence dataset from the model bootstrap
+## reslst is the list of models
+## newdata is the data.frame to predict to
+## pdvar is the name of the partial dependence var to plot
+## type indicates the type of model: lm or glm
+getpdData<-function(reslst,newdata,pdvar,type="glm"){
+	if(type=="lm"){
+		resdf<-ldply(reslst$models,function(mm,newdata,pdvar){
+					mdl<-mm
+					preds<-as.data.frame(predict(mdl,newdata=newdata,interval="confidence"))
+					res<-as.data.frame(cbind(newdata[,pdvar],preds))
+					return(res)
+				}, newdata=newdata,pdvar=pdvar)
+	}else if(type=="glm"){
+		resdf<-ldply(reslst$models,function(mm,newdata,pdvar){
+					mdl<-mm
+					preds<-predict(mdl,newdata=newdata,se.fit=TRUE)
+					tdf<-data.frame(fit=preds$fit,sefit=preds$se.fit)
+					tdf$lwr<-tdf$fit-(1.96*tdf$sefit)
+					tdf$upr<-tdf$fit+(1.96*tdf$sefit)
+					res<-as.data.frame(cbind(newdata[,pdvar],tdf))
+					return(res)
+				}, newdata=newdata,pdvar=pdvar)
+	}else{}
+	if(NROW(pdvar)==1){
+		names(resdf)<-gsub(pdvar,"predictor",names(resdf))
+		pddata<-resdf %>% group_by(predictor) %>% dplyr::summarise(predicted=mean(fit),lcl=min(lwr),ucl=max(upr))
+		names(pddata)<-gsub("predictor",pdvar,names(pddata))
+	}else{
+		names(resdf)<-gsub(pdvar[1],"predictor1",names(resdf))
+		names(resdf)<-gsub(pdvar[2],"predictor2",names(resdf))
+		pddata<-resdf %>% group_by(predictor1,predictor2) %>% dplyr::summarise(predicted=mean(fit),lcl=min(lwr),ucl=max(upr))
+		names(pddata)<-gsub("predictor1",pdvar[1],names(pddata))
+		names(pddata)<-gsub("predictor2",pdvar[2],names(pddata))
+	}
+	
+	return(pddata)
+}
+
+
+
+
+
