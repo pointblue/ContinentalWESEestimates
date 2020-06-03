@@ -132,7 +132,7 @@ bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClust
 		
 	for(x in 1:nsamples){
 		rdf<-getBootSample(pres=pres,abst=abst,binvals=binvals,asizek=asizek)
-		res[[x]]<-rdf
+		res[[x]]<-rbind(rdf,pres)
 	}
 	
 	#return the list
