@@ -103,10 +103,12 @@ bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClust
 				return(regneg)
 			},abst=abst,pres=pres)
 	abst<-negdf
+	cuts<-cut(abst$distToShore, c(-Inf,seq(500, 21500, 500), Inf),labels=c(1:44))
+	abst$distbin<-as.integer(as.character(cuts))
 	
 	#Need to assign probs from normal of positives to the negs
-	fnrm<-fitdist(pres$logdistToShore, distr="norm")  #better fit than a gamma
-	abst$probDTS<-pnorm(abst$logdistToShore,mean=fnrm$estimate[1],sd=fnrm$estimate[2])
+	#fnrm<-fitdist(pres$logdistToShore, distr="norm")  #better fit than a gamma
+	#abst$probDTS<-pnorm(abst$logdistToShore,mean=fnrm$estimate[1],sd=fnrm$estimate[2])
 	
 	#limit the clustering to max 5
 	kv<-stratifyByClusters;if(kv>5){kv<-5}
@@ -143,30 +145,36 @@ bootSampleWESEdata<-function(data,nsamples=100,hasMapsBehavior=0,stratifyByClust
 ## The goal is to obtain a distribution of distances to shore from the negative data that resembles the distribution of the positives
 getBootSample<-function(pres,abst,binvals,asizek){
 	#take onse sample
-	rvals<-rnorm(nrow(pres),0.5,0.2)  #the sd comes from the CV of the above normal fit
-	rvals<-ifelse(rvals<0,-1*rvals,rvals)
-	rvals<-ifelse(rvals>1,0.5,rvals)
+	#rvals<-rnorm(nrow(pres),0.5,0.2)  #the sd comes from the CV of the above normal fit
+	#rvals<-ifelse(rvals<0,-1*rvals,rvals)
+	#rvals<-ifelse(rvals>1,0.5,rvals)
 	
 	#sample with replacement from each cluster
 	if(max(binvals)==1){	#just take a random sample from absents of size psize
-		rdf<-ldply(1:nrow(pres),function(rr,abst,rvals){
-					rv<-rvals[rr]
-					tdf<-subset(abst,probDTS<rv)
+		rdf<-ldply(1:nrow(pres),function(rr,abst){	#,rvals
+					#rv<-rvals[rr]
+					#tdf<-subset(abst,probDTS<rv)
+					
+					#get random bin to sample from
+					dbv<-sample(1:44,1)	#we assigned 44 bins to the abst data
+					tdf<-subset(abst,distbin==dbv)
 					sdf<-tdf[sample(x=1:nrow(tdf),size=1),]
 					return(sdf)
-				},abst=abst,rvals=rvals)
+				},abst=abst)	#,rvals=rvals
 		
 	}else{
 		#sample at random from each cluster, of size asizek, then combine into df - even if cluster=1, could just sample from this side of the function only...
-		rdf<-ldply(.data=binvals, .fun=function(x,abst,rvals,asizek){
-					tdf<-subset(abst,kval==x)
-					krvals<-sample(rvals,size=asizek)
-					bsamp<-ldply(1:asizek,function(rr,abst,krvals){
+		rdf<-ldply(.data=binvals, .fun=function(x,abst,asizek){	#,rvals
+					ttdf<-subset(abst,kval==x)
+					#krvals<-sample(rvals,size=asizek)
+					
+					bsamp<-ldply(1:asizek,function(rr,ttdf){	#,krvals
 								rv<-rvals[rr]
-								tdf<-subset(abst,probDTS<rv)
+								tdf<-subset(tdf,probDTS<rv)
 								sdf<-tdf[sample(x=1:nrow(tdf),size=1),]
 								return(sdf)
-							},abst=abst,krvals=krvals)
+							},ttdf=ttdf)	#,krvals=krvals
+					
 					return(bsamp)
 				},abst=abst,rvals=rvals,asizek=asizek)
 		
@@ -223,22 +231,27 @@ fitModelToBootstrap<-function(fml="abundance~1",datalist,fam="gaussian"){
 	ndat<-NROW(datalist);nrec<-nrow(datalist[[1]])
 	residdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
 	predsdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
+	obsdf<-as.data.frame(matrix(rep(9.999,(ndat*nrec)),ncol=ndat))
 	names(residdf)<-paste("resMdl",1:ndat,sep="_")
 	names(predsdf)<-paste("predMdl",1:ndat,sep="_")
+	names(obsdf)<-paste("obsMdl",1:ndat,sep="_")
 	for(rr in 1:ndat){
 		resids<-mdllst[[rr]]$residuals
 		preds<-mdllst[[rr]]$fitted.values
+		obs<-mdllst[[rr]]$y
 		if(NROW(resids)<nrec){
 			diffrec<-nrec-NROW(resids)
 			padres<-rep(NA,times=diffrec)
 			resids<-c(resids,padres)
 			preds<-c(preds,padres)
+			obs<-c(obs,padres)
 		}
 		residdf[,rr]<-resids
 		predsdf[,rr]<-preds
+		obsdf[,rr]<-obs
 	}
 		
-	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf,preds=predsdf)
+	res<-list(models=mdllst,coefs=coeflst,gofs=gofdf,resids=residdf,preds=predsdf,obs=obsdf,fam=fam)
 	
 	return(res)
 		
@@ -260,6 +273,9 @@ summarizeResults<-function(fitobj,what="coefs"){
 		tvaldf<-obj$t_values;avgtval<-apply(X=tvaldf,MARGIN=2,"mean")
 		pvaldf<-obj$p_values;avgpval<-apply(X=pvaldf,MARGIN=2,"mean")
 		resdf<-data.frame(Parameter=parnams,Coefficient=round(avgcoef,3),StError=round(avgste,3),t_value=round(avgtval,3),Prob_t=round(avgpval,3),Nboot=nbt)
+		if(fitobj$fam=="binomial"){
+			names(resdf)<-gsub("t_value","z_value",names(resdf))
+		}
 	}
 	if(what=="gof"){
 		gofdf<-fitobj$gofs;nbt<-nrow(gofdf)
@@ -269,10 +285,11 @@ summarizeResults<-function(fitobj,what="coefs"){
 	if(what=="residplot"){
 		residdf<-fitobj$resids
 		predsdf<-fitobj$preds
-		resdf<-ldply(1:ncol(residdf),function(cc,residdf,preddf){
-					tdf<-data.frame(bootstrap=cc,predicted=predsdf[,cc],residual=residdf[,cc])
+		obsdf<-fitobj$obs
+		resdf<-ldply(1:ncol(residdf),function(cc,residdf,preddf,obsdf){
+					tdf<-data.frame(bootstrap=cc,predicted=predsdf[,cc],residual=residdf[,cc],observed=obsdf[,cc])
 					return(tdf)
-				},residdf=residdf,preddf=preddf)
+				},residdf=residdf,preddf=preddf,obsdf=obsdf)
 	}
 	return(resdf)
 }
@@ -415,7 +432,19 @@ getpdData<-function(reslst,newdata,pdvars,type="glm"){
 	return(as.data.frame(pddata))
 }
 
-
+## This function computes the lielihood ratio test between two models, or between a model and itself minus a named variable
+## reslst is the results list from the full model bootstraps
+## contr is another list of results from a reduced model's bootstraps
+getLRtest<-function(reslst,contr){
+	rdf<-ldply(1:NROW(reslst$models),function(mm,reslst,contr){
+				mdl2<-reslst$models[[mm]]
+				mdl1<-contr$models[[mm]]
+				lrtt<-as.data.frame(lrtest(mdl1,mdl2))
+				tdf<-data.frame(Ddf=lrtt[2,3],Dloglik=lrtt[1,2]-lrtt[2,2],Chisqv=lrtt[2,4],PrChisq=lrtt[2,5])
+				return(tdf)
+			},reslst=reslst,contr=contr)
+	return(rdf)
+}
 
 
 
