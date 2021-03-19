@@ -354,7 +354,7 @@ getVarDesc<-function(data,fml){
 ## varDesc is the data frame returned by the function getVarDesc
 ## pdvars is the character vector naming 1 or 2 variables to vary
 ## useMedian is aboolean indicating if the median should be used instead of the mean for the fixed values of unvarying variables
-getNewData<-function(varDesc,pdvars,useMedian=FALSE){
+getNewData<-function(varDesc,pdvars,useMedian=FALSE,factorvals=data.frame()){
 	if(NROW(pdvars)>2)stop("More than 2 variables to permutate?")
 	vd<-subset(varDesc,!var %in% pdvars)
 	pd<-subset(varDesc,var %in% pdvars)
@@ -363,10 +363,13 @@ getNewData<-function(varDesc,pdvars,useMedian=FALSE){
 	names(nddf)<-vd$var
 	for(vv in vd$var){
 		if(useMedian==FALSE){cv<-subset(vd,var==vv)$meanv}else{cv<-subset(vd,var==vv)$medv}
-		if(is.na(cv)){ #it's a factor - get the values and choose one at random
+		if(is.na(cv)){ #it's a factor - get the values from factorvals, or choose one at random
 			cv<-subset(vd,var==vv)$modv
 			modvals<-fromJSON(as.character(cv))
 			cv<-sample(modvals,1)
+			if(nrow(factorvals)>0 & (TRUE %in% grepl(vv,factorvals$name))){
+				cv<-subset(factorvals,name==vv)$value
+			}
 		}
 		nddf[,vv]<-rep(cv,times=nrow(nddf))
 	}
