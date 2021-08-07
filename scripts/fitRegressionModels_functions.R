@@ -334,10 +334,10 @@ getVarDesc<-function(data,fml){
 		
 	varDesc<-ldply(vars,function(nn,data){
 				if(is.numeric(data[,nn])){
-					minv<-min(data[,nn], na.rm = FALSE)
-					maxv<-max(data[,nn], na.rm = FALSE)
-					meanv<-mean(data[,nn], na.rm = FALSE)
-					medv<-median(data[,nn], na.rm = FALSE)
+					minv<-min(data[,nn], na.rm = TRUE)
+					maxv<-max(data[,nn], na.rm = TRUE)
+					meanv<-mean(data[,nn], na.rm = TRUE)
+					medv<-median(data[,nn], na.rm = TRUE)
 					modv<-"NA"
 				}else{
 					modv<-as.character(toJSON(unique(data[,nn])))
